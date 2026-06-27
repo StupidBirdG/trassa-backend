@@ -1,1 +1,71 @@
-﻿const axios = require("axios"); const TOKEN = process.env.TELEGRAM_BOT_TOKEN; const BASE = "https://api.telegram.org/bot" + TOKEN; async function sendTelegramCode(chatId, code) { try { const { data } = await axios.post(BASE + "/sendMessage", { chat_id: chatId, text: "🚛 *ТРАССА*\n\nВаш код входа: *" + code + "*\n\nДействует 30 минут.", parse_mode: "Markdown" }); return data.ok ? { ok: true } : { ok: false, error: data.description }; } catch(e) { return { ok: false, error: e.message }; } } async function getOrStoreChatId(pool, phone, updates) { const normalized = phone.replace(/\D/g,""); const { rows } = await pool.query("SELECT telegram_chat_id FROM users WHERE phone = $1", [normalized.startsWith("7") ? "+" + normalized : phone]); if (rows[0]?.telegram_chat_id) return rows[0].telegram_chat_id; for (const u of (updates || []).reverse()) { const msg = u.message; if (msg?.chat?.id) { return msg.chat.id.toString(); } } return null; } async function getTelegramChatId(pool, phone) { try { const { data } = await axios.get(BASE + "/getUpdates?limit=50"); const updates = data.result || []; return await getOrStoreChatId(pool, phone, updates); } catch(e) { return null; } } async function saveChatId(pool, phone, chatId) { try { await pool.query("UPDATE users SET telegram_chat_id = $1 WHERE phone = $2", [chatId, phone]); } catch(e) {} } module.exports = { sendTelegramCode, getTelegramChatId, saveChatId };
+const axios = require("axios");
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const BASE = "https://api.telegram.org/bot" + TOKEN;
+
+function normalizePhone(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.startsWith("8")) d = "7" + d.slice(1);
+  if (!d.startsWith("7")) d = "7" + d;
+  return "+" + d;
+}
+
+async function sendTelegramCode(chatId, code) {
+  try {
+    const r = await axios.post(BASE + "/sendMessage", { chat_id: chatId, text: "TRASSA. Vash kod vhoda: " + code + ". Deystvuet 30 minut." });
+    return r.data.ok ? { ok: true } : { ok: false, error: r.data.description };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+async function sendStartButton(chatId) {
+  try {
+    await axios.post(BASE + "/sendMessage", { chat_id: chatId, text: "Dobro pozhalovat v TRASSA! Nazhmite knopku nizhe, chtoby privyazat nomer telefona.", reply_markup: { keyboard: [[{ text: "Otpravit moy nomer", request_contact: true }]], resize_keyboard: true, one_time_keyboard: true } });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+async function sendLinkedConfirm(chatId) {
+  try {
+    await axios.post(BASE + "/sendMessage", { chat_id: chatId, text: "Nomer privyazan! Vernites na sayt i nazhmite Poluchit kod escho raz.", reply_markup: { remove_keyboard: true } });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+async function saveChatId(pool, phone, chatId) {
+  try {
+    await pool.query("INSERT INTO users (phone, telegram_chat_id, role, phone_verified, name) VALUES ($1, $2, 'shipper', false, 'Telegram') ON CONFLICT (phone) DO UPDATE SET telegram_chat_id = $2", [phone, String(chatId)]);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+async function getChatIdByPhone(pool, phone) {
+  try {
+    const r = await pool.query("SELECT telegram_chat_id FROM users WHERE phone=$1", [phone]);
+    return r.rows[0] && r.rows[0].telegram_chat_id ? r.rows[0].telegram_chat_id : null;
+  } catch (e) { return null; }
+}
+
+async function processUpdates(pool) {
+  try {
+    const res = await axios.get(BASE + "/getUpdates", { params: { limit: 100, timeout: 0 } });
+    const updates = res.data.result || [];
+    let maxId = 0;
+    for (const u of updates) {
+      maxId = Math.max(maxId, u.update_id);
+      const msg = u.message;
+      if (!msg) continue;
+      const chatId = msg.chat && msg.chat.id;
+      if (!chatId) continue;
+      if (msg.contact && msg.contact.phone_number) {
+        const phone = normalizePhone(msg.contact.phone_number);
+        await saveChatId(pool, phone, chatId);
+        await sendLinkedConfirm(chatId);
+      } else if (msg.text && msg.text.indexOf("/start") === 0) {
+        await sendStartButton(chatId);
+      }
+    }
+    if (maxId > 0) { await axios.get(BASE + "/getUpdates", { params: { offset: maxId + 1, limit: 1, timeout: 0 } }); }
+    return { ok: true, processed: updates.length };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+module.exports = { sendTelegramCode, sendStartButton, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };
