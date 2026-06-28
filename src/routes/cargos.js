@@ -1,17 +1,12 @@
 const express = require('express');
-const router  = express.Router();
-const pool    = require('../db/pool');
+const router = express.Router();
+const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
+const { notifyByUserId } = require('../services/telegram');
 
 // Все эндпоинты грузов требуют авторизации
 router.use(authMiddleware);
 
-/**
- * GET /api/cargos
- * Для грузовладельца — свои грузы.
- * Для перевозчика — все открытые + его активные.
- * Фильтры: ?from=Алматы&to=Шымкент&status=open
- */
 router.get('/', async (req, res) => {
   try {
     const { from, to, status } = req.query;
@@ -23,13 +18,12 @@ router.get('/', async (req, res) => {
       params.push(user.id);
       conditions.push(`c.owner_id = $${params.length}`);
     } else {
-      // Перевозчик видит открытые + свои активные грузы
       params.push(user.id);
       conditions.push(`(c.status = 'open' OR (b_my.carrier_id = $${params.length}))`);
     }
 
-    if (from)   { params.push(from);   conditions.push(`c.from_city = $${params.length}`); }
-    if (to)     { params.push(to);     conditions.push(`c.to_city = $${params.length}`); }
+    if (from) { params.push(from); conditions.push(`c.from_city = $${params.length}`); }
+    if (to) { params.push(to); conditions.push(`c.to_city = $${params.length}`); }
     if (status) { params.push(status); conditions.push(`c.status = $${params.length}`); }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -37,12 +31,10 @@ router.get('/', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT
         c.*,
-        u.name        AS owner_name,
-        u.phone       AS owner_phone,
+        u.name AS owner_name,
+        u.phone AS owner_phone,
         u.company_name AS owner_company,
-        -- прогресс трекинга
         c.progress,
-        -- последнее событие трекинга
         (SELECT label FROM tracking_events WHERE cargo_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_event,
         (SELECT created_at FROM tracking_events WHERE cargo_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_ping
       FROM cargos c
@@ -52,7 +44,6 @@ router.get('/', async (req, res) => {
       ORDER BY c.created_at DESC
     `, params);
 
-    // Подтягиваем ставки для каждого груза
     const cargoIds = rows.map(r => r.id);
     let bids = [];
     if (cargoIds.length > 0) {
@@ -78,9 +69,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-/**
- * POST /api/cargos — создать груз (только shipper)
- */
 router.post('/', async (req, res) => {
   if (req.user.role !== 'shipper') {
     return res.status(403).json({ error: 'Только грузовладелец может публиковать грузы' });
@@ -100,7 +88,6 @@ router.post('/', async (req, res) => {
 
     const cargo = rows[0];
 
-    // Первое событие трекинга
     await pool.query(
       `INSERT INTO tracking_events (cargo_id, label) VALUES ($1, $2)`,
       [cargo.id, 'Груз опубликован на бирже']
@@ -113,9 +100,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-/**
- * DELETE /api/cargos/:id — отменить груз (только свой, только открытый)
- */
 router.delete('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -131,9 +115,6 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-/**
- * POST /api/cargos/:id/bids — сделать ставку (только carrier)
- */
 router.post('/:id/bids', async (req, res) => {
   if (req.user.role !== 'carrier') {
     return res.status(403).json({ error: 'Только перевозчик может откликаться' });
@@ -144,12 +125,11 @@ router.post('/:id/bids', async (req, res) => {
 
   try {
     const { rows: cargo } = await pool.query(
-      `SELECT status FROM cargos WHERE id = $1`, [req.params.id]
+      `SELECT owner_id, status, from_city, to_city FROM cargos WHERE id = $1`, [req.params.id]
     );
     if (!cargo.length) return res.status(404).json({ error: 'Груз не найден' });
     if (cargo[0].status !== 'open') return res.status(400).json({ error: 'Груз уже не принимает ставки' });
 
-    // Нельзя дважды
     const { rows: existing } = await pool.query(
       `SELECT id FROM bids WHERE cargo_id = $1 AND carrier_id = $2`, [req.params.id, req.user.id]
     );
@@ -161,6 +141,12 @@ router.post('/:id/bids', async (req, res) => {
       RETURNING *
     `, [req.params.id, req.user.id, truck_type, price]);
 
+    // Уведомление грузовладельцу (fire-and-forget)
+    const c = cargo[0];
+    notifyByUserId(pool, c.owner_id,
+      `🚚 Новый отклик на ваш груз ${c.from_city} → ${c.to_city}\nПеревозчик предложил ${Number(price).toLocaleString('ru-RU')} ₸ (${truck_type}). Откройте ТРАССА, чтобы принять.`
+    ).catch(() => {});
+
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -168,9 +154,6 @@ router.post('/:id/bids', async (req, res) => {
   }
 });
 
-/**
- * POST /api/cargos/:id/accept/:bidId — принять ставку (только owner груза)
- */
 router.post('/:id/accept/:bidId', async (req, res) => {
   try {
     const { rows: cargo } = await pool.query(
@@ -185,13 +168,11 @@ router.post('/:id/accept/:bidId', async (req, res) => {
     );
     if (!bid.length) return res.status(404).json({ error: 'Ставка не найдена' });
 
-    // Обновляем груз
     await pool.query(`
       UPDATE cargos SET status = 'in_transit', accepted_bid_id = $1, progress = 2
       WHERE id = $2
     `, [req.params.bidId, req.params.id]);
 
-    // Отклоняем остальные ставки
     await pool.query(`
       UPDATE bids SET status = 'rejected'
       WHERE cargo_id = $1 AND id != $2
@@ -199,13 +180,18 @@ router.post('/:id/accept/:bidId', async (req, res) => {
 
     await pool.query(`UPDATE bids SET status = 'accepted' WHERE id = $1`, [req.params.bidId]);
 
-    // Трекинг-события
     await pool.query(
       `INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2),($1,$3)`,
       [req.params.id,
-       'Предложение принято',
-       `Перевозчик выехал из ${cargo[0].from_city} (${bid[0].name})`]
+      'Предложение принято',
+      `Перевозчик выехал из ${cargo[0].from_city} (${bid[0].name})`]
     );
+
+    // Уведомление перевозчику (fire-and-forget)
+    const cg = cargo[0];
+    notifyByUserId(pool, bid[0].carrier_id,
+      `✅ Ваше предложение принято! Груз ${cg.from_city} → ${cg.to_city}\nСвяжитесь с грузовладельцем через ТРАССА для деталей.`
+    ).catch(() => {});
 
     res.json({ ok: true });
   } catch (err) {
@@ -214,9 +200,6 @@ router.post('/:id/accept/:bidId', async (req, res) => {
   }
 });
 
-/**
- * POST /api/cargos/:id/deliver — отметить доставленным (только owner)
- */
 router.post('/:id/deliver', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -234,7 +217,6 @@ router.post('/:id/deliver', async (req, res) => {
       [req.params.id, `Доставлено в ${rows[0].to_city}`]
     );
 
-    // Инкремент completed_deliveries перевозчика
     if (rows[0].accepted_bid_id) {
       await pool.query(`
         UPDATE users SET completed_deliveries = completed_deliveries + 1
@@ -249,9 +231,6 @@ router.post('/:id/deliver', async (req, res) => {
   }
 });
 
-/**
- * POST /api/cargos/:id/ping — обновить GPS-прогресс (только carrier)
- */
 router.post('/:id/ping', async (req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -281,9 +260,6 @@ router.post('/:id/ping', async (req, res) => {
   }
 });
 
-/**
- * GET /api/cargos/:id/events — история трекинга
- */
 router.get('/:id/events', async (req, res) => {
   try {
     const { rows } = await pool.query(
