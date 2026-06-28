@@ -30,6 +30,24 @@ async function sendLinkedConfirm(chatId) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+// Generic notification sender used by cargo events
+async function sendNotification(chatId, text) {
+  try {
+    const r = await axios.post(BASE + "/sendMessage", { chat_id: chatId, text: text, parse_mode: "HTML" });
+    return r.data.ok ? { ok: true } : { ok: false, error: r.data.description };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// Look up a user by id and send them a notification. Never throws.
+async function notifyByUserId(pool, userId, text) {
+  try {
+    const r = await pool.query("SELECT telegram_chat_id FROM users WHERE id=$1", [userId]);
+    const chatId = r.rows[0] && r.rows[0].telegram_chat_id;
+    if (!chatId) return { ok: false, error: "no chat_id" };
+    return await sendNotification(chatId, text);
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 async function saveChatId(pool, phone, chatId) {
   try {
     await pool.query("INSERT INTO users (phone, telegram_chat_id, role, phone_verified, name) VALUES ($1, $2, 'shipper', false, 'Telegram') ON CONFLICT (phone) DO UPDATE SET telegram_chat_id = $2", [phone, String(chatId)]);
@@ -68,4 +86,4 @@ async function processUpdates(pool) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
-module.exports = { sendTelegramCode, sendStartButton, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };
+module.exports = { sendTelegramCode, sendStartButton, sendNotification, notifyByUserId, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };
