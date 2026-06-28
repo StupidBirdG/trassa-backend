@@ -7,6 +7,13 @@ const { notifyByUserId } = require('../services/telegram');
 // Все эндпоинты грузов требуют авторизации
 router.use(authMiddleware);
 
+// Проверка активной подписки перевозчика по БД
+async function carrierHasSub(userId) {
+  const { rows } = await pool.query('SELECT subscription_until FROM users WHERE id=$1', [userId]);
+  const until = rows[0] && rows[0].subscription_until;
+  return until && new Date(until) > new Date();
+}
+
 router.get('/', async (req, res) => {
   try {
     const { from, to, status } = req.query;
@@ -57,10 +64,23 @@ router.get('/', async (req, res) => {
       bids = bidRows;
     }
 
-    const result = rows.map(cargo => ({
-      ...cargo,
-      bids: bids.filter(b => b.cargo_id === cargo.id),
-    }));
+    // Перевозчик без активной подписки не видит контакты грузовладельца
+    let hideContacts = false;
+    if (user.role === 'carrier') {
+      hideContacts = !(await carrierHasSub(user.id));
+    }
+
+    const result = rows.map(cargo => {
+      const item = {
+        ...cargo,
+        bids: bids.filter(b => b.cargo_id === cargo.id),
+      };
+      if (hideContacts) {
+        item.owner_phone = null;
+        item.contacts_locked = true;
+      }
+      return item;
+    });
 
     res.json(result);
   } catch (err) {
@@ -118,6 +138,12 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/bids', async (req, res) => {
   if (req.user.role !== 'carrier') {
     return res.status(403).json({ error: 'Только перевозчик может откликаться' });
+  }
+
+  // Требуется активная подписка (или пробный период)
+  const sub = await carrierHasSub(req.user.id);
+  if (!sub) {
+    return res.status(403).json({ error: 'Нужна подписка', code: 'subscription_required' });
   }
 
   const { truck_type, price } = req.body;
