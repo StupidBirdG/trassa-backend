@@ -25,17 +25,17 @@ router.post("/send-code", async (req, res) => {
   const normalized = normalizePhone(phone);
   const code = await createSmsCode(pool, normalized);
 
-  const sms = await sendSms(normalized, "Vash kod TRASSA: " + code);
-  if (sms.ok) {
-    return res.json({ ok: true, phone: normalized, channel: "sms" });
-  }
-
+  // Основной канал — Telegram. SMS через SMSC подключим, когда одобрят имя отправителя.
   await processUpdates(pool);
   const chatId = await getChatIdByPhone(pool, normalized);
   if (chatId) {
     const r = await sendTelegramCode(chatId, code);
     if (r.ok) return res.json({ ok: true, phone: normalized, channel: "telegram" });
   }
+
+  // Фолбэк-заготовка для SMS (включить, когда SMSC одобрит sender):
+  // const sms = await sendSms(normalized, "Vash kod TRASSA: " + code);
+  // if (sms.ok) return res.json({ ok: true, phone: normalized, channel: "sms" });
 
   console.log("CODE for " + normalized + ": " + code);
   res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK });
