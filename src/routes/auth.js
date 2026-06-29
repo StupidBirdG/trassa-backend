@@ -99,6 +99,22 @@ router.post("/subscription/activate", authMiddleware, async (req, res) => {
   res.json({ ok: true, subscription_until: upd[0].subscription_until, price: SUB_PRICE });
 });
 
+// Обновление профиля
+router.put("/profile", authMiddleware, async (req, res) => {
+  const { name, company_name, truck_type, truck_number } = req.body;
+  const updates = [];
+  const vals = [];
+  let i = 1;
+  if (name !== undefined)         { updates.push("name=$"+i);         i++; vals.push(name.trim()); }
+  if (company_name !== undefined)  { updates.push("company_name=$"+i); i++; vals.push(company_name ? company_name.trim() : null); }
+  if (truck_type !== undefined)    { updates.push("truck_type=$"+i);   i++; vals.push(truck_type || null); }
+  if (truck_number !== undefined)  { updates.push("truck_number=$"+i); i++; vals.push(truck_number ? truck_number.trim().toUpperCase() : null); }
+  if (!updates.length) return res.status(400).json({ error: "Нечего обновлять" });
+  vals.push(req.user.id);
+  const { rows } = await pool.query("UPDATE users SET "+updates.join(", ")+" WHERE id=$"+i+" RETURNING *", vals);
+  res.json(rows[0]);
+});
+
 router.delete("/account", authMiddleware, async (req, res) => {
   await pool.query("DELETE FROM users WHERE id=$1", [req.user.id]);
   res.json({ ok: true });
