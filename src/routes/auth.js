@@ -25,13 +25,11 @@ router.post("/send-code", async (req, res) => {
   const normalized = normalizePhone(phone);
   const code = await createSmsCode(pool, normalized);
 
-  // Основной канал — SMS через SMSC.kz
   const sms = await sendSms(normalized, "Vash kod TRASSA: " + code);
   if (sms.ok) {
     return res.json({ ok: true, phone: normalized, channel: "sms" });
   }
 
-  // Фолбэк — Telegram, если SMS не отправилась
   await processUpdates(pool);
   const chatId = await getChatIdByPhone(pool, normalized);
   if (chatId) {
