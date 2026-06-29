@@ -1,9 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
-const { createSmsCode, verifySmsCode } = require("../services/sms");
+const { sendSms, createSmsCode, verifySmsCode } = require("../services/sms");
 const { sendTelegramCode, processUpdates, getChatIdByPhone } = require("../services/telegram");
 const { authMiddleware, signToken } = require("../middleware/auth");
+
+const bt = String.fromCharCode(96);
 
 function normalizePhone(raw) {
   let d = raw.replace(/\D/g, "");
@@ -22,12 +24,21 @@ router.post("/send-code", async (req, res) => {
   if (!phone) return res.status(400).json({ error: "Ukazhite nomer" });
   const normalized = normalizePhone(phone);
   const code = await createSmsCode(pool, normalized);
+
+  // Основной канал — SMS через SMSC.kz
+  const sms = await sendSms(normalized, "Vash kod TRASSA: " + code);
+  if (sms.ok) {
+    return res.json({ ok: true, phone: normalized, channel: "sms" });
+  }
+
+  // Фолбэк — Telegram, если SMS не отправилась
   await processUpdates(pool);
   const chatId = await getChatIdByPhone(pool, normalized);
   if (chatId) {
     const r = await sendTelegramCode(chatId, code);
     if (r.ok) return res.json({ ok: true, phone: normalized, channel: "telegram" });
   }
+
   console.log("CODE for " + normalized + ": " + code);
   res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK });
 });
@@ -51,7 +62,6 @@ router.post("/register", async (req, res) => {
   const normalized = normalizePhone(phone);
   const valid = await verifySmsCode(pool, normalized, code);
   if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
-  // Carriers get a free trial period on registration
   const trialClause = role === "carrier" ? ("now() + interval " + bt + "7 days" + bt) : "NULL";
   const co = company_name ? company_name.trim() : null;
   const exists = await pool.query("SELECT id FROM users WHERE phone=$1", [normalized]);
@@ -76,7 +86,6 @@ router.get("/me", authMiddleware, async (req, res) => {
   res.json(rows[0]);
 });
 
-// Subscription status for the current user
 router.get("/subscription/status", authMiddleware, async (req, res) => {
   const { rows } = await pool.query("SELECT subscription_until, role FROM users WHERE id=$1", [req.user.id]);
   if (!rows.length) return res.status(404).json({ error: "Ne nayden" });
@@ -85,7 +94,6 @@ router.get("/subscription/status", authMiddleware, async (req, res) => {
   res.json({ active: !!active, subscription_until: until, role: rows[0].role, price: SUB_PRICE });
 });
 
-// Activate subscription (+30 days). Placeholder until a real payment provider is connected.
 router.post("/subscription/activate", authMiddleware, async (req, res) => {
   const { rows } = await pool.query("SELECT subscription_until FROM users WHERE id=$1", [req.user.id]);
   if (!rows.length) return res.status(404).json({ error: "Ne nayden" });
@@ -99,17 +107,16 @@ router.post("/subscription/activate", authMiddleware, async (req, res) => {
   res.json({ ok: true, subscription_until: upd[0].subscription_until, price: SUB_PRICE });
 });
 
-// Обновление профиля
 router.put("/profile", authMiddleware, async (req, res) => {
   const { name, company_name, truck_type, truck_number } = req.body;
   const updates = [];
   const vals = [];
   let i = 1;
-  if (name !== undefined)         { updates.push("name=$"+i);         i++; vals.push(name.trim()); }
-  if (company_name !== undefined)  { updates.push("company_name=$"+i); i++; vals.push(company_name ? company_name.trim() : null); }
-  if (truck_type !== undefined)    { updates.push("truck_type=$"+i);   i++; vals.push(truck_type || null); }
-  if (truck_number !== undefined)  { updates.push("truck_number=$"+i); i++; vals.push(truck_number ? truck_number.trim().toUpperCase() : null); }
-  if (!updates.length) return res.status(400).json({ error: "Нечего обновлять" });
+  if (name !== undefined) { updates.push("name=$"+i); i++; vals.push(name.trim()); }
+  if (company_name !== undefined) { updates.push("company_name=$"+i); i++; vals.push(company_name ? company_name.trim() : null); }
+  if (truck_type !== undefined) { updates.push("truck_type=$"+i); i++; vals.push(truck_type || null); }
+  if (truck_number !== undefined) { updates.push("truck_number=$"+i); i++; vals.push(truck_number ? truck_number.trim().toUpperCase() : null); }
+  if (!updates.length) return res.status(400).json({ error: "Nechego obnovlyat" });
   vals.push(req.user.id);
   const { rows } = await pool.query("UPDATE users SET "+updates.join(", ")+" WHERE id=$"+i+" RETURNING *", vals);
   res.json(rows[0]);
