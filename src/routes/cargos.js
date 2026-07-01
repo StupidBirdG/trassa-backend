@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
-const { notifyByUserId } = require('../services/telegram');
+const { notifyByUserId, notifyAllCarriers } = require('../services/telegram');
 
 router.use(authMiddleware);
 
@@ -81,6 +81,7 @@ router.post('/', async (req, res) => {
       [req.user.id, from_city, to_city, weight_tons, cargo_type, pickup_date, price || null, priceOnRequest, comment || null]
     );
     await pool.query('INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2)', [rows[0].id, 'Груз опубликован на бирже']);
+    notifyAllCarriers(pool, rows[0]).catch(() => {});
     res.status(201).json({ ...rows[0], bids: [] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка создания груза' }); }
 });
