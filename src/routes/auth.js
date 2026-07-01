@@ -5,8 +5,6 @@ const { sendSms, createSmsCode, verifySmsCode } = require("../services/sms");
 const { sendTelegramCode, processUpdates, getChatIdByPhone } = require("../services/telegram");
 const { authMiddleware, signToken } = require("../middleware/auth");
 
-const bt = String.fromCharCode(96);
-
 function normalizePhone(raw) {
   let d = raw.replace(/\D/g, "");
   if (d.startsWith("8")) d = "7" + d.slice(1);
@@ -15,8 +13,6 @@ function normalizePhone(raw) {
 }
 
 const BOT_LINK = "https://t.me/Abon9_bot";
-const TRIAL_DAYS = 7;
-const SUB_DAYS = 30;
 const SUB_PRICE = 9000;
 
 router.post("/send-code", async (req, res) => {
@@ -24,19 +20,12 @@ router.post("/send-code", async (req, res) => {
   if (!phone) return res.status(400).json({ error: "Ukazhite nomer" });
   const normalized = normalizePhone(phone);
   const code = await createSmsCode(pool, normalized);
-
-  // Основной канал — Telegram. SMS через SMSC подключим, когда одобрят имя отправителя.
   await processUpdates(pool);
   const chatId = await getChatIdByPhone(pool, normalized);
   if (chatId) {
     const r = await sendTelegramCode(chatId, code);
     if (r.ok) return res.json({ ok: true, phone: normalized, channel: "telegram" });
   }
-
-  // Фолбэк-заготовка для SMS (включить, когда SMSC одобрит sender):
-  // const sms = await sendSms(normalized, "Vash kod TRASSA: " + code);
-  // if (sms.ok) return res.json({ ok: true, phone: normalized, channel: "sms" });
-
   console.log("CODE for " + normalized + ": " + code);
   res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK });
 });
@@ -54,28 +43,37 @@ router.post("/verify", async (req, res) => {
 });
 
 router.post("/register", async (req, res) => {
-  const { phone, code, name, role, company_name } = req.body;
-  if (!phone || !code || !name || !role) return res.status(400).json({ error: "Zapolnite vse polya" });
-  if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Nevernaya rol" });
-  const normalized = normalizePhone(phone);
-  const valid = await verifySmsCode(pool, normalized, code);
-  if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
-  const trialClause = role === "carrier" ? ("now() + interval " + bt + "7 days" + bt) : "NULL";
-  const co = company_name ? company_name.trim() : null;
-  const exists = await pool.query("SELECT id FROM users WHERE phone=$1", [normalized]);
-  if (exists.rows.length > 0) {
-    await pool.query(
-      "UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4, subscription_until = COALESCE(subscription_until, " + trialClause + ") WHERE phone=$1",
-      [normalized, role, name.trim(), co]
-    );
-    const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
-    return res.status(200).json({ ok: true, token: signToken(rows[0]), user: rows[0] });
+  try {
+    const { phone, code, name, role, company_name } = req.body;
+    if (!phone || !code || !name || !role) return res.status(400).json({ error: "Zapolnite vse polya" });
+    if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Nevernaya rol" });
+    const normalized = normalizePhone(phone);
+    const valid = await verifySmsCode(pool, normalized, code);
+    if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
+    const co = company_name ? company_name.trim() : null;
+    const exists = await pool.query("SELECT id FROM users WHERE phone=$1", [normalized]);
+    if (exists.rows.length > 0) {
+      if (role === "carrier") {
+        await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4, subscription_until = COALESCE(subscription_until, now() + interval '7 days') WHERE phone=$1", [normalized, role, name.trim(), co]);
+      } else {
+        await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4 WHERE phone=$1", [normalized, role, name.trim(), co]);
+      }
+      const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
+      return res.status(200).json({ ok: true, token: signToken(rows[0]), user: rows[0] });
+    }
+    let newUser;
+    if (role === "carrier") {
+      const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until) VALUES ($1,TRUE,$2,$3,$4,now() + interval '7 days') RETURNING *", [normalized, role, name.trim(), co]);
+      newUser = rows[0];
+    } else {
+      const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name) VALUES ($1,TRUE,$2,$3,$4) RETURNING *", [normalized, role, name.trim(), co]);
+      newUser = rows[0];
+    }
+    res.status(201).json({ ok: true, token: signToken(newUser), user: newUser });
+  } catch(err) {
+    console.error("Register error:", err.message);
+    res.status(500).json({ error: "Server error: " + err.message });
   }
-  const { rows } = await pool.query(
-    "INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until) VALUES ($1,TRUE,$2,$3,$4," + trialClause + ") RETURNING *",
-    [normalized, role, name.trim(), co]
-  );
-  res.status(201).json({ ok: true, token: signToken(rows[0]), user: rows[0] });
 });
 
 router.get("/me", authMiddleware, async (req, res) => {
@@ -98,10 +96,7 @@ router.post("/subscription/activate", authMiddleware, async (req, res) => {
   const cur = rows[0].subscription_until;
   const stillActive = cur && new Date(cur) > new Date();
   const base = stillActive ? "subscription_until" : "now()";
-  const { rows: upd } = await pool.query(
-    "UPDATE users SET subscription_until = " + base + " + interval " + bt + "30 days" + bt + " WHERE id=$1 RETURNING subscription_until",
-    [req.user.id]
-  );
+  const { rows: upd } = await pool.query("UPDATE users SET subscription_until = " + base + " + interval '30 days' WHERE id=$1 RETURNING subscription_until", [req.user.id]);
   res.json({ ok: true, subscription_until: upd[0].subscription_until, price: SUB_PRICE });
 });
 
