@@ -86,4 +86,23 @@ async function processUpdates(pool) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
-module.exports = { sendTelegramCode, sendStartButton, sendNotification, notifyByUserId, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };
+
+// Уведомить всех перевозчиков с активной подпиской и Telegram о новом грузе
+async function notifyAllCarriers(pool, cargo) {
+  try {
+    const { rows } = await pool.query(
+      "SELECT telegram_chat_id FROM users WHERE role='carrier' AND subscription_until > now() AND telegram_chat_id IS NOT NULL"
+    );
+    const text = '🚛 Новый груз на ТРАССА!\n' +
+      '📍 ' + cargo.from_city + ' → ' + cargo.to_city + '\n' +
+      '⚖️ ' + cargo.weight_tons + ' т · ' + cargo.cargo_type + '\n' +
+      (cargo.price ? '💰 ' + Number(cargo.price).toLocaleString('ru-RU') + ' ₸\n' : '💬 Цена по запросу\n') +
+      '\nОткликнитесь на сайте: https://trassa-frontend-zti8.vercel.app';
+    for (const row of rows) {
+      sendNotification(row.telegram_chat_id, text).catch(() => {});
+    }
+    return { ok: true, sent: rows.length };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+module.exports = { sendTelegramCode, notifyAllCarriers, sendStartButton, sendNotification, notifyByUserId, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };
