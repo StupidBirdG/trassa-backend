@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 3001;
 async function runMigrations() {
   try {
     await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
+    await pool.query("ALTER TABLE cargos ALTER COLUMN price DROP NOT NULL");
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS truck_type VARCHAR(50)");
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS truck_number VARCHAR(20)");
     await pool.query(`CREATE TABLE IF NOT EXISTS messages (
