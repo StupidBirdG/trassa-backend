@@ -9,12 +9,19 @@ const pool = require("./db/pool");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Авто-миграции при старте
 async function runMigrations() {
   try {
     await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS truck_type VARCHAR(50)");
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS truck_number VARCHAR(20)");
+    await pool.query(`CREATE TABLE IF NOT EXISTS messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      cargo_id UUID NOT NULL REFERENCES cargos(id) ON DELETE CASCADE,
+      sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )`);
+    await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_cargo ON messages(cargo_id, created_at)");
     console.log("Migrations OK");
   } catch (e) {
     console.error("Migration error:", e.message);
