@@ -71,14 +71,15 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   if (req.user.role !== 'shipper') return res.status(403).json({ error: 'Только грузовладелец может публиковать грузы' });
-  const { from_city, to_city, weight_tons, cargo_type, pickup_date, price, comment } = req.body;
+  const { from_city, to_city, weight_tons, cargo_type, pickup_date, price, comment, volume_m3 } = req.body;
   if (!from_city || !to_city || !weight_tons || !cargo_type || !pickup_date)
     return res.status(400).json({ error: 'Заполните все обязательные поля' });
   const priceOnRequest = !price;
+  const vol = volume_m3 ? Number(volume_m3) : null;
   try {
     const { rows } = await pool.query(
-      'INSERT INTO cargos (owner_id, from_city, to_city, weight_tons, cargo_type, pickup_date, price, price_on_request, comment) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
-      [req.user.id, from_city, to_city, weight_tons, cargo_type, pickup_date, price || null, priceOnRequest, comment || null]
+      'INSERT INTO cargos (owner_id, from_city, to_city, weight_tons, cargo_type, pickup_date, price, price_on_request, comment, volume_m3) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',
+      [req.user.id, from_city, to_city, weight_tons, cargo_type, pickup_date, price || null, priceOnRequest, comment || null, vol]
     );
     await pool.query('INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2)', [rows[0].id, 'Груз опубликован на бирже']);
     notifyAllCarriers(pool, rows[0]).catch(() => {});
