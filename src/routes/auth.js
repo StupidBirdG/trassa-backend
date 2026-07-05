@@ -121,6 +121,26 @@ res.status(500).json({ error: "Server error: " + err.message });
 }
 });
 
+router.post("/reset-password", async (req, res) => {
+try {
+const { phone, code, password } = req.body;
+if (!phone || !code || !password) return res.status(400).json({ error: "Zapolnite vse polya" });
+if (password.length < 6) return res.status(400).json({ error: "Parol dolzhen byt ne koroche 6 simvolov" });
+const normalized = normalizePhone(phone);
+const valid = await verifySmsCode(pool, normalized, code);
+if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
+const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
+if (!rows.length) return res.status(404).json({ error: "Polzovatel ne nayden" });
+if (!rows[0].email) return res.status(400).json({ error: "U etogo akkaunta net privyazannogo email" });
+const hash = await bcrypt.hash(password, 10);
+const { rows: upd } = await pool.query("UPDATE users SET password_hash=$1 WHERE phone=$2 RETURNING *", [hash, normalized]);
+res.json({ ok: true, token: signToken(upd[0]), user: sanitizeUser(upd[0]) });
+} catch(err) {
+console.error("Reset-password error:", err.message);
+res.status(500).json({ error: "Server error: " + err.message });
+}
+});
+
 router.get("/me", authMiddleware, async (req, res) => {
 const { rows } = await pool.query("SELECT * FROM users WHERE id=$1", [req.user.id]);
 if (!rows.length) return res.status(404).json({ error: "Ne nayden" });
