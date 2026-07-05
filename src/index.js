@@ -6,6 +6,7 @@ const cargoRoutes = require("./routes/cargos");
 const reviewRoutes = require("./routes/reviews");
 const messageRoutes = require("./routes/messages");
 const publicRoutes = require("./routes/public");
+const aiRoutes = require("./routes/ai");
 const pool = require("./db/pool");
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -48,6 +49,7 @@ app.use("/api/cargos", cargoRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/public", publicRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 app.get("/dev/last-code", async (req, res) => {
@@ -57,7 +59,6 @@ app.get("/dev/last-code", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Ручная простая проверка перевозчика/грузовладельца (для админа, без полноценной панели пока)
 app.post("/dev/set-verified", async (req, res) => {
   try {
     const { phone, verified } = req.body;
