@@ -17,6 +17,7 @@ async function runMigrations() {
     await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS volume_m3 NUMERIC");
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS truck_type VARCHAR(50)");
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS truck_number VARCHAR(20)");
+    await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT FALSE");
     await pool.query(`CREATE TABLE IF NOT EXISTS messages (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       cargo_id UUID NOT NULL REFERENCES cargos(id) ON DELETE CASCADE,
@@ -53,6 +54,17 @@ app.get("/dev/last-code", async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT code,phone FROM sms_codes WHERE used=FALSE AND expires_at>now() ORDER BY created_at DESC LIMIT 1");
     res.json(rows[0] || { code: null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Ручная простая проверка перевозчика/грузовладельца (для админа, без полноценной панели пока)
+app.post("/dev/set-verified", async (req, res) => {
+  try {
+    const { phone, verified } = req.body;
+    if (!phone) return res.status(400).json({ error: "Ukazhite phone" });
+    const { rows } = await pool.query("UPDATE users SET verified=$2 WHERE phone=$1 RETURNING id, name, phone, verified", [phone, verified !== false]);
+    if (!rows.length) return res.status(404).json({ error: "Polzovatel ne nayden" });
+    res.json(rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
