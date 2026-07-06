@@ -28,7 +28,7 @@ const SUB_PRICE = 9000;
 
 router.post("/send-code", async (req, res) => {
 const { phone } = req.body;
-if (!phone) return res.status(400).json({ error: "Ukazhite nomer" });
+if (!phone) return res.status(400).json({ error: "Укажите номер" });
 const normalized = normalizePhone(phone);
 const code = await createSmsCode(pool, normalized);
 await processUpdates(pool);
@@ -43,10 +43,10 @@ res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_L
 
 router.post("/verify", async (req, res) => {
 const { phone, code } = req.body;
-if (!phone || !code) return res.status(400).json({ error: "Ukazhite phone i code" });
+if (!phone || !code) return res.status(400).json({ error: "Укажите телефон и код" });
 const normalized = normalizePhone(phone);
 const valid = await verifySmsCode(pool, normalized, code);
-if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
+if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
 const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
 if (rows.length === 0) return res.json({ ok: true, needsRegistration: true, phone: normalized });
 await pool.query("UPDATE users SET phone_verified=TRUE WHERE phone=$1", [normalized]);
@@ -56,11 +56,11 @@ return res.json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0
 router.post("/register", async (req, res) => {
 try {
 const { phone, code, name, role, company_name } = req.body;
-if (!phone || !code || !name || !role) return res.status(400).json({ error: "Zapolnite vse polya" });
-if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Nevernaya rol" });
+if (!phone || !code || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
+if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
 const normalized = normalizePhone(phone);
 const valid = await verifySmsCode(pool, normalized, code);
-if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
+if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
 const co = company_name ? company_name.trim() : null;
 const exists = await pool.query("SELECT id FROM users WHERE phone=$1", [normalized]);
 if (exists.rows.length > 0) {
@@ -83,73 +83,73 @@ newUser = rows[0];
 res.status(201).json({ ok: true, token: signToken(newUser), user: sanitizeUser(newUser) });
 } catch(err) {
 console.error("Register error:", err.message);
-res.status(500).json({ error: "Server error: " + err.message });
+res.status(500).json({ error: "Ошибка сервера: " + err.message });
 }
 });
 
 router.post("/set-email", authMiddleware, async (req, res) => {
 try {
 const { email, password } = req.body;
-if (!email || !password) return res.status(400).json({ error: "Ukazhite email i parol" });
-if (password.length < 6) return res.status(400).json({ error: "Parol dolzhen byt ne koroche 6 simvolov" });
+if (!email || !password) return res.status(400).json({ error: "Укажите email и пароль" });
+if (password.length < 6) return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
 const normalized = normalizeEmail(email);
-if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return res.status(400).json({ error: "Nevernyi format email" });
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return res.status(400).json({ error: "Неверный формат email" });
 const taken = await pool.query("SELECT id FROM users WHERE email=$1 AND id<>$2", [normalized, req.user.id]);
-if (taken.rows.length > 0) return res.status(400).json({ error: "Etot email uzhe zanyat" });
+if (taken.rows.length > 0) return res.status(400).json({ error: "Этот email уже занят" });
 const hash = await bcrypt.hash(password, 10);
 const { rows } = await pool.query("UPDATE users SET email=$1, password_hash=$2 WHERE id=$3 RETURNING *", [normalized, hash, req.user.id]);
 res.json({ ok: true, user: sanitizeUser(rows[0]) });
 } catch(err) {
 console.error("Set-email error:", err.message);
-res.status(500).json({ error: "Server error: " + err.message });
+res.status(500).json({ error: "Ошибка сервера: " + err.message });
 }
 });
 
 router.post("/login-email", async (req, res) => {
 try {
 const { email, password } = req.body;
-if (!email || !password) return res.status(400).json({ error: "Ukazhite email i parol" });
+if (!email || !password) return res.status(400).json({ error: "Укажите email и пароль" });
 const normalized = normalizeEmail(email);
 const { rows } = await pool.query("SELECT * FROM users WHERE email=$1", [normalized]);
-if (!rows.length || !rows[0].password_hash) return res.status(400).json({ error: "Neverniy email ili parol" });
+if (!rows.length || !rows[0].password_hash) return res.status(400).json({ error: "Неверный email или пароль" });
 const match = await bcrypt.compare(password, rows[0].password_hash);
-if (!match) return res.status(400).json({ error: "Neverniy email ili parol" });
+if (!match) return res.status(400).json({ error: "Неверный email или пароль" });
 res.json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0]) });
 } catch(err) {
 console.error("Login-email error:", err.message);
-res.status(500).json({ error: "Server error: " + err.message });
+res.status(500).json({ error: "Ошибка сервера: " + err.message });
 }
 });
 
 router.post("/reset-password", async (req, res) => {
 try {
 const { phone, code, password } = req.body;
-if (!phone || !code || !password) return res.status(400).json({ error: "Zapolnite vse polya" });
-if (password.length < 6) return res.status(400).json({ error: "Parol dolzhen byt ne koroche 6 simvolov" });
+if (!phone || !code || !password) return res.status(400).json({ error: "Заполните все поля" });
+if (password.length < 6) return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
 const normalized = normalizePhone(phone);
 const valid = await verifySmsCode(pool, normalized, code);
-if (!valid) return res.status(400).json({ error: "Neverniy ili istekshiy kod" });
+if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
 const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
-if (!rows.length) return res.status(404).json({ error: "Polzovatel ne nayden" });
-if (!rows[0].email) return res.status(400).json({ error: "U etogo akkaunta net privyazannogo email" });
+if (!rows.length) return res.status(404).json({ error: "Пользователь не найден" });
+if (!rows[0].email) return res.status(400).json({ error: "У этого аккаунта нет привязанного email" });
 const hash = await bcrypt.hash(password, 10);
 const { rows: upd } = await pool.query("UPDATE users SET password_hash=$1 WHERE phone=$2 RETURNING *", [hash, normalized]);
 res.json({ ok: true, token: signToken(upd[0]), user: sanitizeUser(upd[0]) });
 } catch(err) {
 console.error("Reset-password error:", err.message);
-res.status(500).json({ error: "Server error: " + err.message });
+res.status(500).json({ error: "Ошибка сервера: " + err.message });
 }
 });
 
 router.get("/me", authMiddleware, async (req, res) => {
 const { rows } = await pool.query("SELECT * FROM users WHERE id=$1", [req.user.id]);
-if (!rows.length) return res.status(404).json({ error: "Ne nayden" });
+if (!rows.length) return res.status(404).json({ error: "Не найден" });
 res.json(sanitizeUser(rows[0]));
 });
 
 router.get("/subscription/status", authMiddleware, async (req, res) => {
 const { rows } = await pool.query("SELECT subscription_until, role FROM users WHERE id=$1", [req.user.id]);
-if (!rows.length) return res.status(404).json({ error: "Ne nayden" });
+if (!rows.length) return res.status(404).json({ error: "Не найден" });
 const until = rows[0].subscription_until;
 const active = until && new Date(until) > new Date();
 res.json({ active: !!active, subscription_until: until, role: rows[0].role, price: SUB_PRICE });
@@ -157,7 +157,7 @@ res.json({ active: !!active, subscription_until: until, role: rows[0].role, pric
 
 router.post("/subscription/activate", authMiddleware, async (req, res) => {
 const { rows } = await pool.query("SELECT subscription_until FROM users WHERE id=$1", [req.user.id]);
-if (!rows.length) return res.status(404).json({ error: "Ne nayden" });
+if (!rows.length) return res.status(404).json({ error: "Не найден" });
 const cur = rows[0].subscription_until;
 const stillActive = cur && new Date(cur) > new Date();
 const base = stillActive ? "subscription_until" : "now()";
@@ -174,7 +174,7 @@ if (name !== undefined) { updates.push("name=$"+i); i++; vals.push(name.trim());
 if (company_name !== undefined) { updates.push("company_name=$"+i); i++; vals.push(company_name ? company_name.trim() : null); }
 if (truck_type !== undefined) { updates.push("truck_type=$"+i); i++; vals.push(truck_type || null); }
 if (truck_number !== undefined) { updates.push("truck_number=$"+i); i++; vals.push(truck_number ? truck_number.trim().toUpperCase() : null); }
-if (!updates.length) return res.status(400).json({ error: "Nechego obnovlyat" });
+if (!updates.length) return res.status(400).json({ error: "Нечего обновлять" });
 vals.push(req.user.id);
 const { rows } = await pool.query("UPDATE users SET "+updates.join(", ")+" WHERE id=$"+i+" RETURNING *", vals);
 res.json(sanitizeUser(rows[0]));
