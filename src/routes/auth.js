@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
 const bcrypt = require("bcryptjs");
-const { sendSms, createSmsCode, verifySmsCode } = require("../services/sms");
+const { sendSms, createSmsCode, verifySmsCode, checkSmsCode } = require("../services/sms");
 const { sendTelegramCode, processUpdates, getChatIdByPhone } = require("../services/telegram");
 const { authMiddleware, signToken } = require("../middleware/auth");
 
@@ -45,10 +45,12 @@ router.post("/verify", async (req, res) => {
 const { phone, code } = req.body;
 if (!phone || !code) return res.status(400).json({ error: "Укажите телефон и код" });
 const normalized = normalizePhone(phone);
-const valid = await verifySmsCode(pool, normalized, code);
-if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
+const preCheck = await checkSmsCode(pool, normalized, code);
+if (!preCheck) return res.status(400).json({ error: "Неверный или истёкший код" });
 const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
 if (rows.length === 0) return res.json({ ok: true, needsRegistration: true, phone: normalized });
+const valid = await verifySmsCode(pool, normalized, code);
+if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
 await pool.query("UPDATE users SET phone_verified=TRUE WHERE phone=$1", [normalized]);
 return res.json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0]) });
 });
