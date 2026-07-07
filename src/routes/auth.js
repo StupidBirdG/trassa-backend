@@ -89,6 +89,33 @@ res.status(500).json({ error: "Ошибка сервера: " + err.message });
 }
 });
 
+router.post("/register-email", async (req, res) => {
+  try {
+    const { email, password, name, role, company_name } = req.body;
+    if (!email || !password || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
+    if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
+    if (password.length < 6) return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
+    const normalized = normalizeEmail(email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return res.status(400).json({ error: "Неверный формат email" });
+    const exists = await pool.query("SELECT id FROM users WHERE email=$1", [normalized]);
+    if (exists.rows.length > 0) return res.status(400).json({ error: "Этот email уже зарегистрирован" });
+    const co = company_name ? company_name.trim() : null;
+    const hash = await bcrypt.hash(password, 10);
+    let newUser;
+    if (role === "carrier") {
+      const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,subscription_until) VALUES ($1,$2,$3,$4,$5,now() + interval '7 days') RETURNING *", [normalized, hash, role, name.trim(), co]);
+      newUser = rows[0];
+    } else {
+      const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name) VALUES ($1,$2,$3,$4,$5) RETURNING *", [normalized, hash, role, name.trim(), co]);
+      newUser = rows[0];
+    }
+    res.status(201).json({ ok: true, token: signToken(newUser), user: sanitizeUser(newUser) });
+  } catch(err) {
+    console.error("Register-email error:", err.message);
+    res.status(500).json({ error: "Ошибка сервера: " + err.message });
+  }
+});
+
 router.post("/set-email", authMiddleware, async (req, res) => {
 try {
 const { email, password } = req.body;
