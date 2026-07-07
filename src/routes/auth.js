@@ -218,5 +218,22 @@ router.get("/dev/last-code", async (req, res) => {
 const { rows } = await pool.query("SELECT code,phone FROM sms_codes WHERE used=FALSE AND expires_at>now() ORDER BY created_at DESC LIMIT 1");
 res.json(rows[0] || { code: null });
 });
+router.post("/set-phone", authMiddleware, async (req, res) => {
+  try {
+    const { phone, code } = req.body;
+    if (!phone || !code) return res.status(400).json({ error: "Заполните все поля" });
+    const normalized = normalizePhone(phone);
+    const valid = await verifySmsCode(pool, normalized, code);
+    if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
+    const taken = await pool.query("SELECT id FROM users WHERE phone=$1 AND id<>$2", [normalized, req.user.id]);
+    if (taken.rows.length > 0) return res.status(400).json({ error: "Этот телефон уже используется другим аккаунтом" });
+    const { rows } = await pool.query("UPDATE users SET phone=$1, phone_verified=TRUE WHERE id=$2 RETURNING *", [normalized, req.user.id]);
+    res.json({ ok: true, user: sanitizeUser(rows[0]) });
+  } catch(err) {
+    console.error("Set-phone error:", err.message);
+    res.status(500).json({ error: "Ошибка сервера: " + err.message });
+  }
+});
+
 
 module.exports = router;
