@@ -1,4 +1,4 @@
-const express = require("express");
+ЗаполнитевсеполяНеверныйилиистёкшийкодЭтотномеружепривязанкдругомуаккаунтуОшибкасервераconst express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
 const bcrypt = require("bcryptjs");
