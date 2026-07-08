@@ -67,8 +67,14 @@ if (chatId) {
 const r = await sendTelegramCode(chatId, code);
 if (r.ok) return res.json({ ok: true, phone: normalized, channel: "telegram" });
 }
+// Fallback на реальную SMS через Vonage, если Telegram не привязан.
+// Раньше здесь код просто писался в лог сервера и пользователю предлагали
+// привязать Telegram-бота — реального SMS не отправлялось вообще.
+const smsResult = await sendSms(normalized, "Код подтверждения Трасса: " + code);
+if (smsResult.ok) return res.json({ ok: true, phone: normalized, channel: "sms" });
+console.error("SMS fallback failed:", smsResult.error);
 console.log("CODE for " + normalized + ": " + code);
-res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK });
+res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK, sms_error: smsResult.error });
 });
 
 router.post("/verify", async (req, res) => {

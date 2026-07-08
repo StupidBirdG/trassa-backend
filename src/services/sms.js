@@ -1,32 +1,36 @@
 const axios = require("axios");
 
-// Отправка SMS через SMSC.kz
-// https://smsc.kz/api/http/
+// Отправка SMS через Vonage (бывший Nexmo) — международный провайдер вместо SMSC.kz.
+// https://developer.vonage.com/en/messaging/sms/overview (Classic SMS API, REST/JSON)
+// ВАЖНО: до этой правки sendSms() существовал в файле, но нигде не вызывался в реальном
+// коде — /auth/send-code полагался только на Telegram-бота. Теперь sendSms реально
+// подключён как fallback, когда Telegram не привязан (см. routes/auth.js).
 async function sendSms(phone, message) {
 const clean = phone.replace(/\D/g, "");
-if (!process.env.SMSC_LOGIN || !process.env.SMSC_PASSWORD) {
-console.error("SMSC credentials not set");
+if (!process.env.VONAGE_API_KEY || !process.env.VONAGE_API_SECRET) {
+console.error("Vonage credentials not set (VONAGE_API_KEY / VONAGE_API_SECRET)");
 return { ok: false, error: "no_credentials" };
 }
 try {
-const { data } = await axios.get("https://smsc.kz/sys/send.php", {
+const { data } = await axios.post("https://rest.nexmo.com/sms/json", null, {
 params: {
-login: process.env.SMSC_LOGIN,
-psw: process.env.SMSC_PASSWORD,
-phones: clean,
-mes: message,
-fmt: 3, // ответ в формате JSON
-charset: "utf-8"
+api_key: process.env.VONAGE_API_KEY,
+api_secret: process.env.VONAGE_API_SECRET,
+to: clean,
+from: process.env.VONAGE_FROM || "Trassa",
+text: message,
+type: "unicode" // поддержка кириллицы в тексте кода
 }
 });
-console.log("SMSC response:", JSON.stringify(data));
-// При успехе SMSC возвращает { id, cnt }, при ошибке { error, error_code }
-if (data && data.error) {
-return { ok: false, error: data.error, code: data.error_code };
+console.log("Vonage response:", JSON.stringify(data));
+const msg = data && data.messages && data.messages[0];
+// Vonage: status "0" = успех, любой другой код = ошибка (см. error-text)
+if (!msg || msg.status !== "0") {
+return { ok: false, error: (msg && msg["error-text"]) || "unknown_error", code: msg && msg.status };
 }
-return { ok: true, id: data && data.id };
+return { ok: true, id: msg["message-id"], remainingBalance: msg["remaining-balance"] };
 } catch (e) {
-console.error("SMSC error:", e.message);
+console.error("Vonage error:", e.message);
 return { ok: false, error: e.message };
 }
 }
