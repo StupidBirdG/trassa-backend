@@ -81,6 +81,12 @@ updated_at TIMESTAMPTZ DEFAULT now()
 // чтобы renewal сохранял выбранный уровень, если явно не указан другой.
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier VARCHAR(20) DEFAULT 'basic'");
 
+// Юридический пробел (2026-07-08): не было ни фактического согласия на условия
+// использования/обработку персональных данных, ни страниц с текстом этих условий —
+// только надпись под формой без ссылки. Фиксируем факт и время согласия.
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version VARCHAR(20)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);
