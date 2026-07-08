@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
+const { SUBSCRIPTION_TIERS } = require('./auth');
 
 router.use(authMiddleware);
 
@@ -72,6 +73,7 @@ if (cargo.owner_id !== req.user.id) return res.status(403).json({ error: 'Нет
 
 const { rows: candidates } = await pool.query(`
 SELECT u.id, u.name, u.company_name, u.verified, u.bin_verified, u.rating, u.completed_deliveries, u.truck_type,
+u.subscription_tier,
 ur.avg_overall, ur.total_reviews,
 (SELECT COUNT(*)::int FROM bids b2 JOIN cargos c2 ON c2.id=b2.cargo_id
 WHERE b2.carrier_id=u.id AND b2.status='accepted'
@@ -84,17 +86,20 @@ LIMIT 100
 `, [req.params.cargoId, cargo.from_city, cargo.to_city]);
 
 const ranked = candidates.map(c => {
+const tier = c.subscription_tier || 'basic';
+const tierBonus = (SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.basic).score_bonus;
 const ratingScore = Number(c.avg_overall || c.rating || 5);
 const routeBonus = Number(c.route_deliveries || 0);
-const score = ratingScore * 20 + Number(c.completed_deliveries || 0) * 2 + routeBonus * 15 + (c.verified ? 10 : 0) + (c.bin_verified ? 5 : 0);
+const score = ratingScore * 20 + Number(c.completed_deliveries || 0) * 2 + routeBonus * 15 + (c.verified ? 10 : 0) + (c.bin_verified ? 5 : 0) + tierBonus;
 const reasons = [];
 if (routeBonus > 0) reasons.push('уже возил(а) этот маршрут ' + routeBonus + ' раз(а)');
 if (ratingScore >= 4.5) reasons.push('высокий рейтинг ' + ratingScore.toFixed(1));
 if (c.verified) reasons.push('верифицирован');
 if (c.completed_deliveries >= 5) reasons.push(c.completed_deliveries + ' доставок выполнено');
+if (tier !== 'basic') reasons.push('тариф ' + (SUBSCRIPTION_TIERS[tier] || {}).label);
 return {
 id: c.id, name: c.name, company_name: c.company_name, truck_type: c.truck_type,
-verified: c.verified, bin_verified: c.bin_verified,
+verified: c.verified, bin_verified: c.bin_verified, tier,
 rating: ratingScore, completed_deliveries: c.completed_deliveries, route_deliveries: routeBonus,
 score: Math.round(score * 10) / 10,
 reasons

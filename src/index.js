@@ -76,6 +76,11 @@ total_reviews INT DEFAULT 0,
 updated_at TIMESTAMPTZ DEFAULT now()
 )`);
 
+// Multi-tier subscriptions (2026-07-08, по запросу пользователя после реализации freemium):
+// basic/pro/business вместо единого flat-тарифа. Тариф хранится отдельно от даты окончания,
+// чтобы renewal сохранял выбранный уровень, если явно не указан другой.
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier VARCHAR(20) DEFAULT 'basic'");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);
