@@ -47,6 +47,35 @@ viewed_at TIMESTAMPTZ DEFAULT now()
 await pool.query("CREATE INDEX IF NOT EXISTS idx_cargo_views_cargo ON cargo_views(cargo_id, viewed_at)");
 await pool.query("CREATE INDEX IF NOT EXISTS idx_cargo_views_viewer ON cargo_views(cargo_id, viewer_id)");
 
+// FIX (found 2026-07-08 while building AI carrier matching): reviews.js references
+// tables `reviews` and `user_ratings`, but no migration anywhere in this repo ever
+// created them (42P01 undefined_table). Adding them now — this was a pre-existing
+// gap, not something introduced by this PR.
+await pool.query(`CREATE TABLE IF NOT EXISTS reviews (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+order_id UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
+reviewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+reviewee_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+reviewer_role VARCHAR(20) NOT NULL CHECK (reviewer_role IN ('shipper','carrier')),
+rating_overall INT NOT NULL CHECK (rating_overall BETWEEN 1 AND 5),
+rating_punctuality INT CHECK (rating_punctuality BETWEEN 1 AND 5),
+rating_cargo INT CHECK (rating_cargo BETWEEN 1 AND 5),
+rating_communication INT CHECK (rating_communication BETWEEN 1 AND 5),
+comment TEXT,
+created_at TIMESTAMPTZ DEFAULT now(),
+UNIQUE (order_id, reviewer_id)
+)`);
+await pool.query("CREATE INDEX IF NOT EXISTS idx_reviews_reviewee ON reviews(reviewee_id, created_at)");
+await pool.query(`CREATE TABLE IF NOT EXISTS user_ratings (
+user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+avg_overall NUMERIC(3,2),
+avg_punctuality NUMERIC(3,2),
+avg_cargo NUMERIC(3,2),
+avg_communication NUMERIC(3,2),
+total_reviews INT DEFAULT 0,
+updated_at TIMESTAMPTZ DEFAULT now()
+)`);
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);

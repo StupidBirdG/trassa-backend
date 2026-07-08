@@ -59,6 +59,55 @@ res.status(500).json({ error: 'Ошибка сервера' });
 }
 });
 
+// AI-подбор лучших перевозчиков под конкретный груз — расширяет тот же принцип, что и
+// suggest-price: ранжирование на собственных данных биржи (рейтинг, доставки, опыт именно
+// на этом маршруте, верификация), без доп. LLM-вызова. Доступно только владельцу груза;
+// исключает перевозчиков, уже откликнувшихся — это подсказка "кого ещё позвать".
+router.get('/suggest-carriers/:cargoId', async (req, res) => {
+try {
+const { rows: cargoRows } = await pool.query('SELECT id, owner_id, from_city, to_city, status FROM cargos WHERE id=$1', [req.params.cargoId]);
+if (!cargoRows.length) return res.status(404).json({ error: 'Груз не найден' });
+const cargo = cargoRows[0];
+if (cargo.owner_id !== req.user.id) return res.status(403).json({ error: 'Нет доступа' });
+
+const { rows: candidates } = await pool.query(`
+SELECT u.id, u.name, u.company_name, u.verified, u.bin_verified, u.rating, u.completed_deliveries, u.truck_type,
+ur.avg_overall, ur.total_reviews,
+(SELECT COUNT(*)::int FROM bids b2 JOIN cargos c2 ON c2.id=b2.cargo_id
+WHERE b2.carrier_id=u.id AND b2.status='accepted'
+AND lower(c2.from_city)=lower($2) AND lower(c2.to_city)=lower($3)) AS route_deliveries
+FROM users u
+LEFT JOIN user_ratings ur ON ur.user_id = u.id
+WHERE u.role='carrier' AND u.subscription_until > now()
+AND u.id NOT IN (SELECT carrier_id FROM bids WHERE cargo_id=$1)
+LIMIT 100
+`, [req.params.cargoId, cargo.from_city, cargo.to_city]);
+
+const ranked = candidates.map(c => {
+const ratingScore = Number(c.avg_overall || c.rating || 5);
+const routeBonus = Number(c.route_deliveries || 0);
+const score = ratingScore * 20 + Number(c.completed_deliveries || 0) * 2 + routeBonus * 15 + (c.verified ? 10 : 0) + (c.bin_verified ? 5 : 0);
+const reasons = [];
+if (routeBonus > 0) reasons.push('уже возил(а) этот маршрут ' + routeBonus + ' раз(а)');
+if (ratingScore >= 4.5) reasons.push('высокий рейтинг ' + ratingScore.toFixed(1));
+if (c.verified) reasons.push('верифицирован');
+if (c.completed_deliveries >= 5) reasons.push(c.completed_deliveries + ' доставок выполнено');
+return {
+id: c.id, name: c.name, company_name: c.company_name, truck_type: c.truck_type,
+verified: c.verified, bin_verified: c.bin_verified,
+rating: ratingScore, completed_deliveries: c.completed_deliveries, route_deliveries: routeBonus,
+score: Math.round(score * 10) / 10,
+reasons
+};
+}).sort((a, b) => b.score - a.score).slice(0, 10);
+
+res.json({ cargo_id: cargo.id, candidates_considered: candidates.length, suggestions: ranked });
+} catch (err) {
+console.error(err);
+res.status(500).json({ error: 'Ошибка сервера' });
+}
+});
+
 // Голосовая публикация груза: превращаем расшифровку речи в структурированные поля заявки
 router.post('/parse-cargo', async (req, res) => {
   try {
