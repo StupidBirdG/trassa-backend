@@ -35,4 +35,27 @@ router.get('/routes', async (req, res) => {
   }
 });
 
+// Публичный каталог компаний — конкурентная фича (есть у Cargo.kz, Adista).
+// Только базовая репутационная информация, без телефона/email — контакты остаются platform-gated.
+router.get('/companies', async (req, res) => {
+  try {
+    const { role, verified_only } = req.query;
+    const params = [];
+    const conds = ["company_name IS NOT NULL", "company_name <> ''"];
+    if (role === 'carrier' || role === 'shipper') { params.push(role); conds.push('role = $' + params.length); }
+    if (verified_only === 'true') { conds.push('verified = TRUE'); }
+    const { rows } = await pool.query(`
+      SELECT id, name, company_name, role, verified, bin_verified, rating, completed_deliveries, truck_type, created_at
+      FROM users
+      WHERE ${conds.join(' AND ')}
+      ORDER BY verified DESC, rating DESC NULLS LAST, completed_deliveries DESC
+      LIMIT 200
+    `, params);
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 module.exports = router;

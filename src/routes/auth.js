@@ -17,6 +17,26 @@ function normalizeEmail(raw) {
 return raw.trim().toLowerCase();
 }
 
+// Проверка контрольной суммы БИН РК (12 цифр, алгоритм КГД).
+// ВАЖНО: это только проверка формата/чек-суммы, а НЕ подтверждение существования
+// компании в госреестре — для этого нужен доступ к API eGov/КГД (требует договора).
+function validateBinChecksum(bin) {
+if (!/^\d{12}$/.test(bin)) return false;
+const digits = bin.split('').map(Number);
+const w1 = [1,2,3,4,5,6,7,8,9,10,11];
+let sum = 0;
+for (let i = 0; i < 11; i++) sum += digits[i] * w1[i];
+let check = sum % 11;
+if (check === 10) {
+const w2 = [3,4,5,6,7,8,9,10,11,1,2];
+sum = 0;
+for (let i = 0; i < 11; i++) sum += digits[i] * w2[i];
+check = sum % 11;
+if (check === 10) return false;
+}
+return check === digits[11];
+}
+
 function sanitizeUser(user) {
 if (!user) return user;
 const { password_hash, ...rest } = user;
@@ -195,7 +215,7 @@ res.json({ ok: true, subscription_until: upd[0].subscription_until, price: SUB_P
 });
 
 router.put("/profile", authMiddleware, async (req, res) => {
-const { name, company_name, truck_type, truck_number } = req.body;
+const { name, company_name, truck_type, truck_number, bin } = req.body;
 const updates = [];
 const vals = [];
 let i = 1;
@@ -203,6 +223,18 @@ if (name !== undefined) { updates.push("name=$"+i); i++; vals.push(name.trim());
 if (company_name !== undefined) { updates.push("company_name=$"+i); i++; vals.push(company_name ? company_name.trim() : null); }
 if (truck_type !== undefined) { updates.push("truck_type=$"+i); i++; vals.push(truck_type || null); }
 if (truck_number !== undefined) { updates.push("truck_number=$"+i); i++; vals.push(truck_number ? truck_number.trim().toUpperCase() : null); }
+if (bin !== undefined) {
+if (bin === null || bin === "") {
+updates.push("bin=$"+i); i++; vals.push(null);
+updates.push("bin_verified=$"+i); i++; vals.push(false);
+} else {
+const trimmedBin = String(bin).trim();
+const isValid = validateBinChecksum(trimmedBin);
+if (!isValid) return res.status(400).json({ error: "Некорректный БИН (не проходит проверку контрольной суммы)" });
+updates.push("bin=$"+i); i++; vals.push(trimmedBin);
+updates.push("bin_verified=$"+i); i++; vals.push(true);
+}
+}
 if (!updates.length) return res.status(400).json({ error: "Нечего обновлять" });
 vals.push(req.user.id);
 const { rows } = await pool.query("UPDATE users SET "+updates.join(", ")+" WHERE id=$"+i+" RETURNING *", vals);
