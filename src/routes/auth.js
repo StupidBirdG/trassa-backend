@@ -201,7 +201,19 @@ const { rows } = await pool.query("SELECT subscription_until, role FROM users WH
 if (!rows.length) return res.status(404).json({ error: "Не найден" });
 const until = rows[0].subscription_until;
 const active = until && new Date(until) > new Date();
-res.json({ active: !!active, subscription_until: until, role: rows[0].role, price: SUB_PRICE });
+const body = { active: !!active, subscription_until: until, role: rows[0].role, price: SUB_PRICE };
+// Freemium-этап: перевозчикам без подписки показываем остаток бесплатных откликов за месяц
+if (rows[0].role === "carrier" && !active) {
+const FREE_BIDS_PER_MONTH = 3;
+const { rows: bidRows } = await pool.query(
+"SELECT COUNT(*)::int AS cnt FROM bids WHERE carrier_id=$1 AND created_at >= date_trunc('month', now())",
+[req.user.id]
+);
+body.free_bids_used = bidRows[0].cnt;
+body.free_bids_limit = FREE_BIDS_PER_MONTH;
+body.free_bids_remaining = Math.max(0, FREE_BIDS_PER_MONTH - bidRows[0].cnt);
+}
+res.json(body);
 });
 
 router.post("/subscription/activate", authMiddleware, async (req, res) => {
