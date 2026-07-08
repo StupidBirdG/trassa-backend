@@ -44,7 +44,15 @@ return rest;
 }
 
 const BOT_LINK = "https://t.me/Abon9_bot";
-const SUB_PRICE = 9000;
+const SUB_PRICE = 9000; // сохранён для обратной совместимости — это цена тарифа basic
+
+// Многоуровневая подписка (2026-07-08): 3 тарифа вместо единого flat 9000 ₸.
+// Все тарифы дают безлимитные отклики и GPS — разница в приоритете видимости.
+const SUBSCRIPTION_TIERS = {
+basic: { price: 9000, label: "Базовый", score_bonus: 0, features: ["Безлимитные отклики на грузы", "Контакты грузовладельцев", "Telegram-уведомления", "GPS-трекинг доставки"] },
+pro: { price: 15000, label: "Про", score_bonus: 15, features: ["Всё из Базового", "Приоритет в AI-подборе перевозчиков", "Бейдж «PRO» в каталоге компаний", "Выше в результатах поиска"] },
+business: { price: 25000, label: "Бизнес", score_bonus: 30, features: ["Всё из Про", "Максимальный приоритет в AI-подборе", "Бейдж «BUSINESS» в каталоге", "Приоритетная поддержка"] },
+};
 
 router.post("/send-code", async (req, res) => {
 const { phone } = req.body;
@@ -197,11 +205,19 @@ res.json(sanitizeUser(rows[0]));
 });
 
 router.get("/subscription/status", authMiddleware, async (req, res) => {
-const { rows } = await pool.query("SELECT subscription_until, role FROM users WHERE id=$1", [req.user.id]);
+const { rows } = await pool.query("SELECT subscription_until, subscription_tier, role FROM users WHERE id=$1", [req.user.id]);
 if (!rows.length) return res.status(404).json({ error: "Не найден" });
 const until = rows[0].subscription_until;
 const active = until && new Date(until) > new Date();
-const body = { active: !!active, subscription_until: until, role: rows[0].role, price: SUB_PRICE };
+const tier = rows[0].subscription_tier || "basic";
+const body = {
+active: !!active,
+subscription_until: until,
+role: rows[0].role,
+tier,
+price: (SUBSCRIPTION_TIERS[tier] || SUBSCRIPTION_TIERS.basic).price,
+tiers: SUBSCRIPTION_TIERS
+};
 // Freemium-этап: перевозчикам без подписки показываем остаток бесплатных откликов за месяц
 if (rows[0].role === "carrier" && !active) {
 const FREE_BIDS_PER_MONTH = 3;
@@ -217,13 +233,21 @@ res.json(body);
 });
 
 router.post("/subscription/activate", authMiddleware, async (req, res) => {
-const { rows } = await pool.query("SELECT subscription_until FROM users WHERE id=$1", [req.user.id]);
+const { tier } = req.body;
+const { rows } = await pool.query("SELECT subscription_until, subscription_tier FROM users WHERE id=$1", [req.user.id]);
 if (!rows.length) return res.status(404).json({ error: "Не найден" });
+const chosenTier = tier && SUBSCRIPTION_TIERS[tier] ? tier : (rows[0].subscription_tier || "basic");
+if (tier && !SUBSCRIPTION_TIERS[tier]) return res.status(400).json({ error: "Неизвестный тариф. Доступны: " + Object.keys(SUBSCRIPTION_TIERS).join(", ") });
 const cur = rows[0].subscription_until;
 const stillActive = cur && new Date(cur) > new Date();
-const base = stillActive ? "subscription_until" : "now()";
-const { rows: upd } = await pool.query("UPDATE users SET subscription_until = " + base + " + interval '30 days' WHERE id=$1 RETURNING subscription_until", [req.user.id]);
-res.json({ ok: true, subscription_until: upd[0].subscription_until, price: SUB_PRICE });
+// Смена тарифа на более высокий/низкий начинает отсчёт заново, продление того же тарифа — от текущей даты окончания
+const sameTier = stillActive && rows[0].subscription_tier === chosenTier;
+const base = sameTier ? "subscription_until" : "now()";
+const { rows: upd } = await pool.query(
+"UPDATE users SET subscription_until = " + base + " + interval '30 days', subscription_tier = $2 WHERE id=$1 RETURNING subscription_until, subscription_tier",
+[req.user.id, chosenTier]
+);
+res.json({ ok: true, subscription_until: upd[0].subscription_until, tier: upd[0].subscription_tier, price: SUBSCRIPTION_TIERS[chosenTier].price });
 });
 
 router.put("/profile", authMiddleware, async (req, res) => {
@@ -292,3 +316,4 @@ res.status(500).json({ error: "Ошибка сервера: " + err.message });
 });
 
 module.exports = router;
+module.exports.SUBSCRIPTION_TIERS = SUBSCRIPTION_TIERS;

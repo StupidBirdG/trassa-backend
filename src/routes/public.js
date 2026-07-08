@@ -45,10 +45,15 @@ router.get('/companies', async (req, res) => {
     if (role === 'carrier' || role === 'shipper') { params.push(role); conds.push('role = $' + params.length); }
     if (verified_only === 'true') { conds.push('verified = TRUE'); }
     const { rows } = await pool.query(`
-      SELECT id, name, company_name, role, verified, bin_verified, rating, completed_deliveries, truck_type, created_at
+      SELECT id, name, company_name, role, verified, bin_verified, rating, completed_deliveries, truck_type, created_at,
+        CASE WHEN subscription_until > now() THEN subscription_tier ELSE NULL END AS active_tier
       FROM users
       WHERE ${conds.join(' AND ')}
-      ORDER BY verified DESC, rating DESC NULLS LAST, completed_deliveries DESC
+      ORDER BY
+        verified DESC,
+        CASE WHEN subscription_until > now() THEN subscription_tier ELSE 'basic' END = 'business' DESC,
+        CASE WHEN subscription_until > now() THEN subscription_tier ELSE 'basic' END = 'pro' DESC,
+        rating DESC NULLS LAST, completed_deliveries DESC
       LIMIT 200
     `, params);
     res.json(rows);
