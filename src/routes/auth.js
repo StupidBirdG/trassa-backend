@@ -48,6 +48,8 @@ const SUB_PRICE = 9000; // сохранён для обратной совмес
 
 // Многоуровневая подписка (2026-07-08): 3 тарифа вместо единого flat 9000 ₸.
 // Все тарифы дают безлимитные отклики и GPS — разница в приоритете видимости.
+const TERMS_VERSION = "2026-07-08";
+
 const SUBSCRIPTION_TIERS = {
 basic: { price: 9000, label: "Базовый", score_bonus: 0, features: ["Безлимитные отклики на грузы", "Контакты грузовладельцев", "Telegram-уведомления", "GPS-трекинг доставки"] },
 pro: { price: 15000, label: "Про", score_bonus: 15, features: ["Всё из Базового", "Приоритет в AI-подборе перевозчиков", "Бейдж «PRO» в каталоге компаний", "Выше в результатах поиска"] },
@@ -85,9 +87,10 @@ return res.json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0
 
 router.post("/register", async (req, res) => {
 try {
-const { phone, code, name, role, company_name } = req.body;
+const { phone, code, name, role, company_name, agreed_terms } = req.body;
 if (!phone || !code || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
 if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
+if (agreed_terms !== true) return res.status(400).json({ error: "Необходимо согласиться с условиями использования и политикой конфиденциальности", code: "terms_not_accepted" });
 const normalized = normalizePhone(phone);
 const valid = await verifySmsCode(pool, normalized, code);
 if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
@@ -95,19 +98,19 @@ const co = company_name ? company_name.trim() : null;
 const exists = await pool.query("SELECT id FROM users WHERE phone=$1", [normalized]);
 if (exists.rows.length > 0) {
 if (role === "carrier") {
-await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4, subscription_until = COALESCE(subscription_until, now() + interval '7 days') WHERE phone=$1", [normalized, role, name.trim(), co]);
+await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4, subscription_until = COALESCE(subscription_until, now() + interval '7 days'), terms_accepted_at=now(), terms_version=$5 WHERE phone=$1", [normalized, role, name.trim(), co, TERMS_VERSION]);
 } else {
-await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4 WHERE phone=$1", [normalized, role, name.trim(), co]);
+await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, company_name=$4, terms_accepted_at=now(), terms_version=$5 WHERE phone=$1", [normalized, role, name.trim(), co, TERMS_VERSION]);
 }
 const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
 return res.status(200).json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0]) });
 }
 let newUser;
 if (role === "carrier") {
-const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until) VALUES ($1,TRUE,$2,$3,$4,now() + interval '7 days') RETURNING *", [normalized, role, name.trim(), co]);
+const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until,terms_accepted_at,terms_version) VALUES ($1,TRUE,$2,$3,$4,now() + interval '7 days',now(),$5) RETURNING *", [normalized, role, name.trim(), co, TERMS_VERSION]);
 newUser = rows[0];
 } else {
-const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name) VALUES ($1,TRUE,$2,$3,$4) RETURNING *", [normalized, role, name.trim(), co]);
+const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,terms_accepted_at,terms_version) VALUES ($1,TRUE,$2,$3,$4,now(),$5) RETURNING *", [normalized, role, name.trim(), co, TERMS_VERSION]);
 newUser = rows[0];
 }
 res.status(201).json({ ok: true, token: signToken(newUser), user: sanitizeUser(newUser) });
@@ -119,10 +122,11 @@ res.status(500).json({ error: "Ошибка сервера: " + err.message });
 
 router.post("/register-email", async (req, res) => {
 try {
-const { email, password, name, role, company_name, skip_trial } = req.body;
+const { email, password, name, role, company_name, skip_trial, agreed_terms } = req.body;
 if (!email || !password || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
 if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
 if (password.length < 6) return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
+if (agreed_terms !== true) return res.status(400).json({ error: "Необходимо согласиться с условиями использования и политикой конфиденциальности", code: "terms_not_accepted" });
 const normalized = normalizeEmail(email);
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return res.status(400).json({ error: "Неверный формат email" });
 const exists = await pool.query("SELECT id FROM users WHERE email=$1", [normalized]);
@@ -131,10 +135,10 @@ const co = company_name ? company_name.trim() : null;
 const hash = await bcrypt.hash(password, 10);
 let newUser;
 if (role === "carrier" && skip_trial !== true) {
-const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,subscription_until) VALUES ($1,$2,$3,$4,$5,now() + interval '7 days') RETURNING *", [normalized, hash, role, name.trim(), co]);
+const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,subscription_until,terms_accepted_at,terms_version) VALUES ($1,$2,$3,$4,$5,now() + interval '7 days',now(),$6) RETURNING *", [normalized, hash, role, name.trim(), co, TERMS_VERSION]);
 newUser = rows[0];
 } else {
-const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name) VALUES ($1,$2,$3,$4,$5) RETURNING *", [normalized, hash, role, name.trim(), co]);
+const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,terms_accepted_at,terms_version) VALUES ($1,$2,$3,$4,$5,now(),$6) RETURNING *", [normalized, hash, role, name.trim(), co, TERMS_VERSION]);
 newUser = rows[0];
 }
 res.status(201).json({ ok: true, token: signToken(newUser), user: sanitizeUser(newUser) });
