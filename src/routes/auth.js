@@ -91,7 +91,7 @@ res.status(500).json({ error: "Ошибка сервера: " + err.message });
 
 router.post("/register-email", async (req, res) => {
 try {
-const { email, password, name, role, company_name } = req.body;
+const { email, password, name, role, company_name, skip_trial } = req.body;
 if (!email || !password || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
 if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
 if (password.length < 6) return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
@@ -102,7 +102,7 @@ if (exists.rows.length > 0) return res.status(400).json({ error: "Этот email
 const co = company_name ? company_name.trim() : null;
 const hash = await bcrypt.hash(password, 10);
 let newUser;
-if (role === "carrier") {
+if (role === "carrier" && skip_trial !== true) {
 const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,subscription_until) VALUES ($1,$2,$3,$4,$5,now() + interval '7 days') RETURNING *", [normalized, hash, role, name.trim(), co]);
 newUser = rows[0];
 } else {
