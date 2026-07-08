@@ -31,6 +31,22 @@ text TEXT NOT NULL,
 created_at TIMESTAMPTZ DEFAULT now()
 )`);
 await pool.query("CREATE INDEX IF NOT EXISTS idx_messages_cargo ON messages(cargo_id, created_at)");
+
+// Competitor-analysis quick wins (2026-07-08): BIN verification, real GPS location, cargo view tracking
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bin VARCHAR(12)");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bin_verified BOOLEAN DEFAULT FALSE");
+await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS current_lat NUMERIC(9,6)");
+await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS current_lng NUMERIC(9,6)");
+await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS location_updated_at TIMESTAMPTZ");
+await pool.query(`CREATE TABLE IF NOT EXISTS cargo_views (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+cargo_id UUID NOT NULL REFERENCES cargos(id) ON DELETE CASCADE,
+viewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+viewed_at TIMESTAMPTZ DEFAULT now()
+)`);
+await pool.query("CREATE INDEX IF NOT EXISTS idx_cargo_views_cargo ON cargo_views(cargo_id, viewed_at)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_cargo_views_viewer ON cargo_views(cargo_id, viewer_id)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);

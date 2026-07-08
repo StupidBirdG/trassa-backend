@@ -91,6 +91,43 @@ res.status(201).json({ ...rows[0], bids: [] });
 } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка создания груза' }); }
 });
 
+// Просмотр одного груза. Логируем просмотр от перевозчиков — питает "Кто смотрел мой груз".
+router.get('/:id', async (req, res) => {
+try {
+const { rows } = await pool.query(`
+SELECT c.*, u.name AS owner_name, u.phone AS owner_phone, u.company_name AS owner_company, u.verified AS owner_verified
+FROM cargos c JOIN users u ON u.id = c.owner_id WHERE c.id=$1
+`, [req.params.id]);
+if (!rows.length) return res.status(404).json({ error: 'Груз не найден' });
+const cargo = rows[0];
+if (req.user.role !== 'shipper' || cargo.owner_id !== req.user.id) {
+if (req.user.role === 'carrier') {
+await pool.query('INSERT INTO cargo_views (cargo_id, viewer_id) VALUES ($1,$2)', [req.params.id, req.user.id]).catch(() => {});
+}
+}
+const hideContacts = req.user.role === 'carrier' && cargo.owner_id !== req.user.id && !(await carrierHasSub(req.user.id));
+if (hideContacts) { cargo.owner_phone = null; cargo.contacts_locked = true; }
+res.json(cargo);
+} catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+// "Кто смотрел мой груз" — доступно только владельцу груза.
+router.get('/:id/viewers', async (req, res) => {
+try {
+const { rows: cargo } = await pool.query('SELECT owner_id FROM cargos WHERE id=$1', [req.params.id]);
+if (!cargo.length) return res.status(404).json({ error: 'Груз не найден' });
+if (cargo[0].owner_id !== req.user.id) return res.status(403).json({ error: 'Нет доступа' });
+const { rows } = await pool.query(`
+SELECT u.id, u.name, u.company_name, u.verified, u.rating, MAX(v.viewed_at) AS last_viewed_at, COUNT(*)::int AS view_count
+FROM cargo_views v JOIN users u ON u.id = v.viewer_id
+WHERE v.cargo_id=$1
+GROUP BY u.id, u.name, u.company_name, u.verified, u.rating
+ORDER BY last_viewed_at DESC
+`, [req.params.id]);
+res.json({ total_views: rows.reduce((s, r) => s + r.view_count, 0), unique_viewers: rows.length, viewers: rows });
+} catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 router.delete('/:id', async (req, res) => {
 try {
 const { rows } = await pool.query('SELECT * FROM cargos WHERE id=$1 AND owner_id=$2', [req.params.id, req.user.id]);
@@ -157,6 +194,32 @@ const newProgress = Math.min(94, (rows[0].progress || 0) + Number(req.body.progr
 await pool.query('UPDATE cargos SET progress=$1 WHERE id=$2', [newProgress, req.params.id]);
 await pool.query('INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2)', [req.params.id, 'GPS: местоположение обновлено']);
 res.json({ ok: true, progress: newProgress });
+} catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+// Реальные координаты от водителя (навигация браузера/приложения), а не выдуманный прогресс.
+// Заменяет "фейковый GPS" — конкурентный пробел, найденный при анализе рынка.
+router.put('/:id/location', async (req, res) => {
+try {
+const { lat, lng } = req.body;
+if (lat === undefined || lng === undefined) return res.status(400).json({ error: 'Укажите lat и lng' });
+if (isNaN(Number(lat)) || isNaN(Number(lng)) || Math.abs(Number(lat)) > 90 || Math.abs(Number(lng)) > 180) {
+return res.status(400).json({ error: 'Некорректные координаты' });
+}
+const { rows } = await pool.query("SELECT c.id FROM cargos c JOIN bids b ON b.id=c.accepted_bid_id WHERE c.id=$1 AND b.carrier_id=$2 AND c.status='in_transit'", [req.params.id, req.user.id]);
+if (!rows.length) return res.status(403).json({ error: 'Нет доступа' });
+await pool.query('UPDATE cargos SET current_lat=$1, current_lng=$2, location_updated_at=now() WHERE id=$3', [lat, lng, req.params.id]);
+res.json({ ok: true });
+} catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+// Текущее местоположение груза — для отображения на карте у грузовладельца.
+router.get('/:id/location', async (req, res) => {
+try {
+const { rows } = await pool.query('SELECT current_lat, current_lng, location_updated_at FROM cargos WHERE id=$1', [req.params.id]);
+if (!rows.length) return res.status(404).json({ error: 'Груз не найден' });
+if (!rows[0].current_lat) return res.json({ available: false });
+res.json({ available: true, lat: rows[0].current_lat, lng: rows[0].current_lng, updated_at: rows[0].location_updated_at });
 } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
