@@ -7,6 +7,7 @@ const reviewRoutes = require("./routes/reviews");
 const messageRoutes = require("./routes/messages");
 const publicRoutes = require("./routes/public");
 const aiRoutes = require("./routes/ai");
+const adminRoutes = require("./routes/admin");
 const pool = require("./db/pool");
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -87,6 +88,12 @@ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier V
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ");
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version VARCHAR(20)");
 
+// Админ-панель (2026-07-09): раньше модерация делалась вручную через прямые SQL-запросы.
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_reason TEXT");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at TIMESTAMPTZ");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);
@@ -110,6 +117,7 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 app.get("/dev/last-code", async (req, res) => {
