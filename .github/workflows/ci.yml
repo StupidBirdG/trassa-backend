@@ -46,6 +46,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Run database migrations (base schema)
+        run: npm run db:migrate
+
       - name: Start server
         run: node src/index.js &
 

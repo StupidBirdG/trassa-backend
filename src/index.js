@@ -14,6 +14,12 @@ const PORT = process.env.PORT || 3001;
 
 async function runMigrations() {
 try {
+// FIX (found 2026-07-09 setting up CI against a genuinely fresh database): unlike
+// every other retrofitted column here, subscription_until was never created by ANY
+// migration script — it must have been manually ALTERed into production once, long
+// before this repo's migration history. Same category of gap as the reviews/
+// user_ratings tables found earlier. Used everywhere (auth.js, cargos.js, ai.js).
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ");
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
 await pool.query("ALTER TABLE cargos ALTER COLUMN price DROP NOT NULL");
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS volume_m3 NUMERIC");
