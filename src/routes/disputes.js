@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
+const { notifyAdmin } = require('../services/telegram');
 
 router.use(authMiddleware);
 
@@ -39,6 +40,7 @@ router.post('/', async (req, res) => {
       [bid_id, bid.cargo_id, req.user.id, respondentId, reason, description || null]
     );
 
+    notifyAdmin('⚠️ Новая жалоба на TRASSA\nПричина: ' + reason + '\nСделка: ' + bid.from_city + ' → ' + bid.to_city + '\nПроверить в админ-панели → вкладка «Споры».').catch(() => {});
     res.status(201).json({ success: true, dispute: rows[0] });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Вы уже подавали жалобу по этой сделке' });
