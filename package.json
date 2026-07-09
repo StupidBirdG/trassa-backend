@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "type": "commonjs",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "db:migrate": "node src/db/migrate.js",
-    "db:seed": "node src/db/seed.js"
+    "db:seed": "node src/db/seed.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
