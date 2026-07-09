@@ -8,6 +8,7 @@ const messageRoutes = require("./routes/messages");
 const publicRoutes = require("./routes/public");
 const aiRoutes = require("./routes/ai");
 const adminRoutes = require("./routes/admin");
+const paymentRoutes = require("./routes/payments");
 const pool = require("./db/pool");
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -27,6 +28,22 @@ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until 
 // "Date.now() - accepted < 48h" check was always NaN-comparison-false, silently never
 // blocking. Reviews could technically be left on any deal, no matter how old.
 await pool.query("ALTER TABLE bids ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()");
+
+// Kaspi Pay через PayBox.money (2026-07-09): подписка сейчас активируется без реальной
+// оплаты. payments — таблица заказов на оплату для аудита и обработки callback'а.
+await pool.query(`CREATE TABLE IF NOT EXISTS payments (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+order_id VARCHAR(100) UNIQUE NOT NULL,
+tier VARCHAR(20) NOT NULL,
+amount NUMERIC(12,2) NOT NULL,
+status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','failed')),
+provider_payment_id VARCHAR(100),
+created_at TIMESTAMPTZ DEFAULT now(),
+paid_at TIMESTAMPTZ
+)`);
+await pool.query("CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, created_at)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)");
 
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
 await pool.query("ALTER TABLE cargos ALTER COLUMN price DROP NOT NULL");
@@ -124,6 +141,8 @@ next();
 });
 
 app.use(express.json());
+// PayBox шлёт callback как form-urlencoded, не JSON — нужен отдельный парсер.
+app.use(express.urlencoded({ extended: true }));
 app.use("/api/auth/send-code", rateLimit({ windowMs: 60000, max: 20 }));
 app.use("/api/auth", authRoutes);
 app.use("/api/cargos", cargoRoutes);
@@ -132,6 +151,7 @@ app.use("/api/messages", messageRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/payments", paymentRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 app.get("/dev/last-code", async (req, res) => {
