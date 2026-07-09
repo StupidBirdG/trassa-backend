@@ -45,6 +45,13 @@ paid_at TIMESTAMPTZ
 await pool.query("CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, created_at)");
 await pool.query("CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)");
 
+// Ручной перевод на Kaspi Gold (2026-07-09): у владельца пока нет ИП/самозанятости,
+// поэтому реальные агрегаторы (PayBox и т.п.) недоступны — KYC требует юр. статус.
+// До регистрации ИП подписки подтверждаются вручную админом после Kaspi-перевода.
+await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider VARCHAR(20) NOT NULL DEFAULT 'paybox'");
+await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS confirmed_by UUID REFERENCES users(id)");
+await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS user_marked_paid_at TIMESTAMPTZ");
+
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
 await pool.query("ALTER TABLE cargos ALTER COLUMN price DROP NOT NULL");
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS volume_m3 NUMERIC");

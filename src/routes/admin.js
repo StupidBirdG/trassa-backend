@@ -81,6 +81,55 @@ router.delete('/cargos/:id', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
+// ─── Платежи (ручной Kaspi-перевод, пока нет ИП для агрегатора) ────────────
+
+router.get('/payments', async (req, res) => {
+  try {
+    const { status } = req.query;
+    const params = [];
+    const conds = [];
+    if (status === 'pending' || status === 'paid' || status === 'failed') { params.push(status); conds.push('p.status = $' + params.length); }
+    const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+    const { rows } = await pool.query(`
+      SELECT p.id, p.order_id, p.tier, p.amount, p.status, p.provider, p.created_at, p.paid_at, p.user_marked_paid_at,
+             u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone
+      FROM payments p JOIN users u ON u.id = p.user_id
+      ${where}
+      ORDER BY p.user_marked_paid_at DESC NULLS LAST, p.created_at DESC
+      LIMIT 200
+    `, params);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+// Подтверждает ручной Kaspi-перевод: помечает платёж оплаченным и продлевает/активирует
+// подписку — та же логика продления, что и в автоматическом paybox-callback'е.
+router.post('/payments/:id/confirm', async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM payments WHERE id=$1 AND status='pending'", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Платёж не найден или уже обработан' });
+    const payment = rows[0];
+
+    await pool.query("UPDATE payments SET status='paid', paid_at=now(), confirmed_by=$1 WHERE id=$2", [req.user.id, payment.id]);
+    const { rows: userRows } = await pool.query('SELECT subscription_until, subscription_tier FROM users WHERE id=$1', [payment.user_id]);
+    const cur = userRows[0] && userRows[0].subscription_until;
+    const stillActive = cur && new Date(cur) > new Date();
+    const sameTier = stillActive && userRows[0].subscription_tier === payment.tier;
+    const base = sameTier ? 'subscription_until' : 'now()';
+    await pool.query('UPDATE users SET subscription_until = ' + base + " + interval '30 days', subscription_tier=$2 WHERE id=$1", [payment.user_id, payment.tier]);
+
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/payments/:id/reject', async (req, res) => {
+  try {
+    const { rows } = await pool.query("UPDATE payments SET status='failed' WHERE id=$1 AND status='pending' RETURNING id", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Платёж не найден или уже обработан' });
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 // ─── Статистика ─────────────────────────────────────────────────────────────
 
 router.get('/stats', async (req, res) => {
