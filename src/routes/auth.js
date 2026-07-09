@@ -305,10 +305,10 @@ res.status(500).json({ error: "Ошибка сервера: " + err.message });
 }
 });
 
-router.get("/dev/last-code", async (req, res) => {
-const { rows } = await pool.query("SELECT code,phone FROM sms_codes WHERE used=FALSE AND expires_at>now() ORDER BY created_at DESC LIMIT 1");
-res.json(rows[0] || { code: null });
-});
+// SECURITY FIX (2026-07-09): this endpoint returned the most recent unused SMS OTP for
+// ANY phone with no authentication — a live account-takeover primitive. Removed outright
+// (not gated behind NODE_ENV — a misconfigured env var must not be able to re-expose it).
+// See also the matching /dev/* cleanup in src/index.js from the same security review.
 
 router.post("/set-phone", authMiddleware, async (req, res) => {
 try {

@@ -174,6 +174,18 @@ app.use(express.json());
 // PayBox шлёт callback как form-urlencoded, не JSON — нужен отдельный парсер.
 app.use(express.urlencoded({ extended: true }));
 app.use("/api/auth/send-code", rateLimit({ windowMs: 60000, max: 20 }));
+// SECURITY FIX (2026-07-09, same review as the /dev/* removal above): these endpoints
+// check a 6-digit OTP (1,000,000 combinations, valid 30 minutes — see services/sms.js)
+// or a password, with NO attempt limiting at all. Without a rate limit, an automated
+// script could brute-force an OTP well within its validity window, or brute-force a
+// login password — reset-password is the worst case, since a guessed OTP there lets an
+// attacker set a NEW password on someone else's phone-linked account outright.
+const authBruteForceLimit = rateLimit({ windowMs: 15 * 60000, max: 15, standardHeaders: true, legacyHeaders: false });
+app.use("/api/auth/verify", authBruteForceLimit);
+app.use("/api/auth/register", authBruteForceLimit);
+app.use("/api/auth/reset-password", authBruteForceLimit);
+app.use("/api/auth/login-email", authBruteForceLimit);
+app.use("/api/auth/set-phone", authBruteForceLimit);
 app.use("/api/auth", authRoutes);
 app.use("/api/cargos", cargoRoutes);
 app.use("/api/reviews", reviewRoutes);
@@ -185,70 +197,16 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/disputes", disputeRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
-app.get("/dev/last-code", async (req, res) => {
-try {
-const { rows } = await pool.query("SELECT code,phone FROM sms_codes WHERE used=FALSE AND expires_at>now() ORDER BY created_at DESC LIMIT 1");
-res.json(rows[0] || { code: null });
-} catch (e) { res.status(500).json({ error: e.message }); }
-});
 
-app.post("/dev/set-verified", async (req, res) => {
-try {
-const { phone, verified } = req.body;
-if (!phone) return res.status(400).json({ error: "Ukazhite phone" });
-const { rows } = await pool.query("UPDATE users SET verified=$2 WHERE phone=$1 RETURNING id, name, phone, verified", [phone, verified !== false]);
-if (!rows.length) return res.status(404).json({ error: "Polzovatel ne nayden" });
-res.json(rows[0]);
-} catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/dev/set-subscription", async (req, res) => {
-try {
-const { phone, days } = req.body;
-if (!phone) return res.status(400).json({ error: "Ukazhite phone" });
-let query, params;
-if (days === null || days === undefined) {
-query = "UPDATE users SET subscription_until = NULL WHERE phone=$1 RETURNING id, name, phone, subscription_until";
-params = [phone];
-} else {
-query = "UPDATE users SET subscription_until = now() + ($2 || ' days')::interval WHERE phone=$1 RETURNING id, name, phone, subscription_until";
-params = [phone, days];
-}
-const { rows } = await pool.query(query, params);
-if (!rows.length) return res.status(404).json({ error: "Polzovatel ne nayden" });
-res.json(rows[0]);
-} catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Dev helper: lookup subscription state by user id (email OR phone accounts),
-// without requiring a JWT — mirrors /api/auth/subscription/status for testing.
-app.get("/dev/subscription-status/:id", async (req, res) => {
-try {
-const { rows } = await pool.query("SELECT id, name, email, phone, role, subscription_until FROM users WHERE id=$1", [req.params.id]);
-if (!rows.length) return res.status(404).json({ error: "Polzovatel ne nayden" });
-const until = rows[0].subscription_until;
-const active = until && new Date(until) > new Date();
-res.json({ ...rows[0], active: !!active });
-} catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Dev helper: register a carrier via email/password with NO trial granted
-// (equivalent to register-email + skip_trial:true, exposed for quick testing).
-app.post("/dev/register-carrier-without-trial", async (req, res) => {
-try {
-const bcrypt = require("bcryptjs");
-const { signToken } = require("./middleware/auth");
-const { email, password, name, company_name } = req.body;
-if (!email || !password || !name) return res.status(400).json({ error: "Ukazhite email, password, name" });
-const normalized = email.trim().toLowerCase();
-const exists = await pool.query("SELECT id FROM users WHERE email=$1", [normalized]);
-if (exists.rows.length > 0) return res.status(400).json({ error: "Etot email uzhe zaregistrirovan" });
-const hash = await bcrypt.hash(password, 10);
-const { rows: inserted } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name) VALUES ($1,$2,'carrier',$3,$4) RETURNING *", [normalized, hash, name.trim(), company_name ? company_name.trim() : null]);
-const { password_hash, ...user } = inserted[0];
-res.status(201).json({ ok: true, token: signToken(inserted[0]), user });
-} catch (e) { res.status(500).json({ error: e.message }); }
-});
+// SECURITY FIX (2026-07-09, found during a security review): the /dev/* endpoints below
+// used to live here completely unauthenticated in production. /dev/last-code returned
+// the most recent unused SMS OTP for ANY phone — a live account-takeover primitive
+// (attacker polls it during someone else's login/registration and steals their code).
+// /dev/set-subscription granted unlimited free subscription to any phone account — a
+// direct bypass of the entire payment system. /dev/set-verified and
+// /dev/subscription-status/:id leaked trust/PII data with no auth. No test in this repo
+// referenced any of them (grep confirmed), so they're removed outright rather than
+// gated behind NODE_ENV — a misconfigured env var must not be able to re-expose this.
 
 app.use((_, res) => res.status(404).json({ error: "Not found" }));
 app.use((err, _req, res, _next) => res.status(500).json({ error: "Server error" }));
