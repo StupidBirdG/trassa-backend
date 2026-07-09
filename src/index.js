@@ -20,6 +20,14 @@ try {
 // before this repo's migration history. Same category of gap as the reviews/
 // user_ratings tables found earlier. Used everywhere (auth.js, cargos.js, ai.js).
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until TIMESTAMPTZ");
+
+// FIX (48-hour review window bug, found 2026-07-08 while building AI carrier matching,
+// fixed 2026-07-09): reviews.js reads bid.updated_at to compute the 48h window, but
+// bids never had an updated_at column — new Date(undefined) is Invalid Date, so the
+// "Date.now() - accepted < 48h" check was always NaN-comparison-false, silently never
+// blocking. Reviews could technically be left on any deal, no matter how old.
+await pool.query("ALTER TABLE bids ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()");
+
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
 await pool.query("ALTER TABLE cargos ALTER COLUMN price DROP NOT NULL");
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS volume_m3 NUMERIC");

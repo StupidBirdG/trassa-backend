@@ -193,8 +193,10 @@ if (cargo[0].status !== 'open') return res.status(400).json({ error: 'Груз �
 const { rows: bid } = await pool.query('SELECT b.*, u.name FROM bids b JOIN users u ON u.id=b.carrier_id WHERE b.id=$1 AND b.cargo_id=$2', [req.params.bidId, req.params.id]);
 if (!bid.length) return res.status(404).json({ error: 'Ставка не найдена' });
 await pool.query("UPDATE cargos SET status='in_transit', accepted_bid_id=$1, progress=2 WHERE id=$2", [req.params.bidId, req.params.id]);
-await pool.query("UPDATE bids SET status='rejected' WHERE cargo_id=$1 AND id!=$2", [req.params.id, req.params.bidId]);
-await pool.query("UPDATE bids SET status='accepted' WHERE id=$1", [req.params.bidId]);
+await pool.query("UPDATE bids SET status='rejected', updated_at=now() WHERE cargo_id=$1 AND id!=$2", [req.params.id, req.params.bidId]);
+// updated_at здесь — момент принятия ставки, от него reviews.js отсчитывает 48-часовое
+// окно для отзыва (см. FIX в src/index.js runMigrations).
+await pool.query("UPDATE bids SET status='accepted', updated_at=now() WHERE id=$1", [req.params.bidId]);
 await pool.query('INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2),($1,$3)', [req.params.id, 'Предложение принято', 'Перевозчик выехал из ' + cargo[0].from_city]);
 notifyByUserId(pool, bid[0].carrier_id, '✅ Ваше предложение принято! Груз ' + cargo[0].from_city + ' → ' + cargo[0].to_city).catch(() => {});
 res.json({ ok: true });
