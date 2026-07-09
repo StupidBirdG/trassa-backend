@@ -104,4 +104,13 @@ return { ok: true, sent: rows.length };
 } catch (e) { return { ok: false, error: e.message }; }
 }
 
-module.exports = { sendTelegramCode, notifyAllCarriers, sendStartButton, sendNotification, notifyByUserId, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };
+// Мониторинг/алерты (2026-07-09): единственный сейчас способ узнать о падении сервера,
+// необработанной ошибке или новом споре/платеже — самому зайти и проверить. Отправляем
+// такие события владельцу в личку боту. ADMIN_TELEGRAM_CHAT_ID получается один раз через
+// /start у бота (см. .env.example) — если не задан, просто no-op, ничего не ломаем.
+async function notifyAdmin(text) {
+if (!process.env.ADMIN_TELEGRAM_CHAT_ID) return { ok: false, error: 'no_admin_chat_id' };
+return sendNotification(process.env.ADMIN_TELEGRAM_CHAT_ID, text);
+}
+
+module.exports = { sendTelegramCode, notifyAllCarriers, sendStartButton, sendNotification, notifyByUserId, notifyAdmin, processUpdates, saveChatId, getChatIdByPhone, normalizePhone };

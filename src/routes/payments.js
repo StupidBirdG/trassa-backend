@@ -5,6 +5,7 @@ const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
 const paybox = require('../services/paybox');
 const { SUBSCRIPTION_TIERS } = require('./auth');
+const { notifyAdmin } = require('../services/telegram');
 
 // Создаёт заказ на оплату подписки и возвращает ссылку на платёжную страницу PayBox
 // (там пользователь увидит Kaspi QR среди способов оплаты). Реальная активация тарифа
@@ -123,10 +124,11 @@ res.status(500).json({ error: 'Ошибка сервера' });
 router.post('/manual/:orderId/mark-paid', authMiddleware, async (req, res) => {
 try {
 const { rows } = await pool.query(
-"UPDATE payments SET user_marked_paid_at=now() WHERE order_id=$1 AND user_id=$2 AND provider='manual_kaspi' AND status='pending' RETURNING id",
+"UPDATE payments SET user_marked_paid_at=now() WHERE order_id=$1 AND user_id=$2 AND provider='manual_kaspi' AND status='pending' RETURNING id, tier, amount",
 [req.params.orderId, req.user.id]
 );
 if (!rows.length) return res.status(404).json({ error: 'Платёж не найден' });
+notifyAdmin('💰 Новый Kaspi-перевод на проверку\nЗаказ: ' + req.params.orderId + '\nТариф: ' + rows[0].tier + ' · ' + Number(rows[0].amount).toLocaleString('ru-RU') + ' ₸\nПодтвердить в админ-панели → вкладка «Платежи».').catch(() => {});
 res.json({ ok: true });
 } catch (err) {
 console.error(err);

@@ -10,7 +10,28 @@ const aiRoutes = require("./routes/ai");
 const adminRoutes = require("./routes/admin");
 const paymentRoutes = require("./routes/payments");
 const disputeRoutes = require("./routes/disputes");
+const { notifyAdmin } = require("./services/telegram");
 const pool = require("./db/pool");
+
+// Мониторинг (2026-07-09): раньше единственный способ узнать об упавшем запросе/процессе
+// был зайти самому и проверить логи Railway. Троттлинг — чтобы шквал одинаковых ошибок
+// (например БД временно недоступна) не завалил Telegram сотнями сообщений подряд.
+const lastAlertAt = new Map();
+function alertAdminThrottled(key, text) {
+const now = Date.now();
+const prev = lastAlertAt.get(key) || 0;
+if (now - prev < 60000) return; // не чаще раза в минуту на один и тот же тип ошибки
+lastAlertAt.set(key, now);
+notifyAdmin(text).catch(() => {});
+}
+process.on("unhandledRejection", (reason) => {
+console.error("Unhandled rejection:", reason);
+alertAdminThrottled("unhandledRejection", "⚠️ TRASSA: unhandled rejection\n" + String(reason && reason.stack || reason).slice(0, 500));
+});
+process.on("uncaughtException", (err) => {
+console.error("Uncaught exception:", err);
+alertAdminThrottled("uncaughtException", "🔴 TRASSA: uncaught exception (process may restart)\n" + String(err && err.stack || err).slice(0, 500));
+});
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -209,6 +230,13 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 // gated behind NODE_ENV — a misconfigured env var must not be able to re-expose this.
 
 app.use((_, res) => res.status(404).json({ error: "Not found" }));
-app.use((err, _req, res, _next) => res.status(500).json({ error: "Server error" }));
+app.use((err, req, res, _next) => {
+console.error("Express error handler:", err);
+alertAdminThrottled(
+"express:" + req.method + " " + req.path,
+"🔴 TRASSA: 500 on " + req.method + " " + req.path + "\n" + String(err && err.stack || err).slice(0, 500)
+);
+res.status(500).json({ error: "Server error" });
+});
 
 app.listen(PORT, () => console.log("TRASSA on port " + PORT));
