@@ -4,6 +4,7 @@ const pool = require("../db/pool");
 const bcrypt = require("bcryptjs");
 const { sendSms, createSmsCode, verifySmsCode, checkSmsCode } = require("../services/sms");
 const { sendTelegramCode, processUpdates, getChatIdByPhone } = require("../services/telegram");
+const { sendWhatsApp } = require("../services/whatsapp");
 const { authMiddleware, signToken } = require("../middleware/auth");
 
 function normalizePhone(raw) {
@@ -67,14 +68,15 @@ if (chatId) {
 const r = await sendTelegramCode(chatId, code);
 if (r.ok) return res.json({ ok: true, phone: normalized, channel: "telegram" });
 }
-// Fallback на реальную SMS через Vonage, если Telegram не привязан.
-// Раньше здесь код просто писался в лог сервера и пользователю предлагали
-// привязать Telegram-бота — реального SMS не отправлялось вообще.
+// Fallback-цепочка: Telegram (бесплатно) → WhatsApp (пока номер не одобрен Meta —
+// см. services/whatsapp.js) → SMS через Infobip (подтверждённо рабочий канал).
+const waResult = await sendWhatsApp(normalized, "Код подтверждения Трасса: " + code);
+if (waResult.ok) return res.json({ ok: true, phone: normalized, channel: "whatsapp" });
 const smsResult = await sendSms(normalized, "Код подтверждения Трасса: " + code);
 if (smsResult.ok) return res.json({ ok: true, phone: normalized, channel: "sms" });
-console.error("SMS fallback failed:", smsResult.error);
+console.error("WhatsApp+SMS fallback failed:", waResult.error, smsResult.error);
 console.log("CODE for " + normalized + ": " + code);
-res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK, sms_error: smsResult.error });
+res.json({ ok: true, phone: normalized, channel: "need_telegram", botLink: BOT_LINK, whatsapp_error: waResult.error, sms_error: smsResult.error });
 });
 
 router.post("/verify", async (req, res) => {
