@@ -130,6 +130,43 @@ router.post('/payments/:id/reject', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
+// ─── Споры (non-monetary защита от мошенничества, пока нет эскроу) ─────────
+
+router.get('/disputes', async (req, res) => {
+  try {
+    const { status } = req.query;
+    const params = [];
+    const conds = [];
+    if (status === 'open' || status === 'resolved') { params.push(status); conds.push('d.status = $' + params.length); }
+    const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+    const { rows } = await pool.query(`
+      SELECT d.*, c.from_city, c.to_city,
+             cu.name AS complainant_name, cu.email AS complainant_email,
+             ru.name AS respondent_name, ru.email AS respondent_email, ru.banned AS respondent_banned
+      FROM disputes d
+      JOIN cargos c ON c.id = d.cargo_id
+      JOIN users cu ON cu.id = d.complainant_id
+      JOIN users ru ON ru.id = d.respondent_id
+      ${where}
+      ORDER BY d.status ASC, d.created_at DESC
+      LIMIT 200
+    `, params);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/disputes/:id/resolve', async (req, res) => {
+  try {
+    const { resolution } = req.body;
+    const { rows } = await pool.query(
+      "UPDATE disputes SET status='resolved', resolution=$1, resolved_by=$2, resolved_at=now() WHERE id=$3 AND status='open' RETURNING id",
+      [resolution || null, req.user.id, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Спор не найден или уже закрыт' });
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 // ─── Статистика ─────────────────────────────────────────────────────────────
 
 router.get('/stats', async (req, res) => {

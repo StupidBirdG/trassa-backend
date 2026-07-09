@@ -9,6 +9,7 @@ const publicRoutes = require("./routes/public");
 const aiRoutes = require("./routes/ai");
 const adminRoutes = require("./routes/admin");
 const paymentRoutes = require("./routes/payments");
+const disputeRoutes = require("./routes/disputes");
 const pool = require("./db/pool");
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -51,6 +52,28 @@ await pool.query("CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(orde
 await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider VARCHAR(20) NOT NULL DEFAULT 'paybox'");
 await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS confirmed_by UUID REFERENCES users(id)");
 await pool.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS user_marked_paid_at TIMESTAMPTZ");
+
+// Споры (2026-07-09): нет ИП => нет юридической возможности держать деньги в эскроу для
+// сделок между грузовладельцем и перевозчиком (это уже не своя выручка, а чужие деньги —
+// требует лицензии/банковского эскроу). До регистрации ИП защита от мошенничества —
+// non-monetary: жалобы видны админу, админ разбирается и может забанить нарушителя.
+await pool.query(`CREATE TABLE IF NOT EXISTS disputes (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+bid_id UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
+cargo_id UUID NOT NULL REFERENCES cargos(id) ON DELETE CASCADE,
+complainant_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+respondent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+reason VARCHAR(50) NOT NULL,
+description TEXT,
+status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+resolution TEXT,
+resolved_by UUID REFERENCES users(id),
+created_at TIMESTAMPTZ DEFAULT now(),
+resolved_at TIMESTAMPTZ
+)`);
+await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_bid_complainant ON disputes(bid_id, complainant_id)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_disputes_status ON disputes(status, created_at)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_disputes_respondent ON disputes(respondent_id)");
 
 await pool.query("ALTER TABLE cargos ADD COLUMN IF NOT EXISTS price_on_request BOOLEAN DEFAULT FALSE");
 await pool.query("ALTER TABLE cargos ALTER COLUMN price DROP NOT NULL");
@@ -159,6 +182,7 @@ app.use("/api/public", publicRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/disputes", disputeRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 app.get("/dev/last-code", async (req, res) => {
