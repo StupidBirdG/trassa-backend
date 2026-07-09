@@ -1,6 +1,6 @@
 const { test, describe, before } = require('node:test');
 const assert = require('node:assert/strict');
-const { api, registerUser, waitForServer } = require('./helpers');
+const { api, registerUser, promoteAdmin, waitForServer, pool } = require('./helpers');
 const paybox = require('../src/services/paybox');
 
 before(async () => { await waitForServer(); });
@@ -70,7 +70,83 @@ describe('payments: /api/payments/paybox/create without configured provider', ()
 
   test('unknown order id -> 404 on status lookup', async () => {
     const { token } = await registerUser({ role: 'carrier', prefix: 'paystatus' });
-    const r = await api('/api/payments/paybox/nonexistent-order', { headers: { Authorization: 'Bearer ' + token } });
+    const r = await api('/api/payments/status/nonexistent-order', { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(r.status, 404);
+  });
+});
+
+// Ручной Kaspi-перевод — временное решение, пока у владельца нет ИП/самозанятости для
+// подключения реального агрегатора. Тестовое окружение (CI) не задаёт KASPI_PHONE,
+// поэтому по умолчанию проверяем именно ветку "недоступно"; полный флоу с реальным
+// номером сверяется вручную.
+describe('payments: manual Kaspi transfer', () => {
+  test('returns 503 payments_not_configured when KASPI_PHONE is absent', async () => {
+    if (process.env.KASPI_PHONE) return;
+    const { token } = await registerUser({ role: 'carrier', prefix: 'kaspinoconf' });
+    const r = await api('/api/payments/manual/create', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { tier: 'basic' } });
+    assert.equal(r.status, 503);
+    assert.equal(r.data.code, 'payments_not_configured');
+  });
+
+  test('shipper cannot create a manual payment', async () => {
+    const { token } = await registerUser({ role: 'shipper', prefix: 'kaspishipper' });
+    const r = await api('/api/payments/manual/create', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { tier: 'basic' } });
+    assert.equal(r.status, 403);
+  });
+
+  test('mark-paid on an unknown order -> 404', async () => {
+    const { token } = await registerUser({ role: 'carrier', prefix: 'kaspimark' });
+    const r = await api('/api/payments/manual/nonexistent-order/mark-paid', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(r.status, 404);
+  });
+
+  // KASPI_PHONE lives in the SERVER process's env, not the test process's — setting
+  // process.env here wouldn't reach it. So /manual/create's success path (and the real
+  // kaspi_phone/kaspi_name it returns) is verified manually against production/.env,
+  // same as PayBox credentials. Here we test the parts that don't depend on that env
+  // var: seed a pending payment directly in the DB (as if /manual/create had run) and
+  // drive it through mark-paid -> admin list -> admin confirm -> subscription activation.
+  test('mark-paid -> admin sees it pending -> admin confirm activates subscription', async () => {
+    const { token, user } = await registerUser({ role: 'carrier', prefix: 'kaspifull' });
+    const admin = await registerUser({ role: 'shipper', prefix: 'kaspiadmin' });
+    await promoteAdmin(admin.user.id);
+
+    const orderId = 'TRASSA-TEST-' + Date.now();
+    await pool.query(
+      "INSERT INTO payments (user_id, order_id, tier, amount, status, provider) VALUES ($1,$2,'pro',15000,'pending','manual_kaspi')",
+      [user.id, orderId]
+    );
+
+    const markPaid = await api('/api/payments/manual/' + orderId + '/mark-paid', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(markPaid.status, 200);
+
+    const list = await api('/api/admin/payments?status=pending', { headers: { Authorization: 'Bearer ' + admin.token } });
+    assert.equal(list.status, 200);
+    const entry = list.data.find((p) => p.order_id === orderId);
+    assert.ok(entry, 'pending payment should be visible to admin');
+    assert.ok(entry.user_marked_paid_at);
+
+    const confirm = await api('/api/admin/payments/' + entry.id + '/confirm', { method: 'POST', headers: { Authorization: 'Bearer ' + admin.token } });
+    assert.equal(confirm.status, 200);
+
+    const status = await api('/api/payments/status/' + orderId, { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(status.data.status, 'paid');
+
+    const subStatus = await api('/api/auth/subscription/status', { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(subStatus.data.tier, 'pro');
+    assert.equal(subStatus.data.active, true);
+  });
+
+  test('admin confirming an already-processed payment -> 404', async () => {
+    const { user } = await registerUser({ role: 'carrier', prefix: 'kaspidouble' });
+    const admin = await registerUser({ role: 'shipper', prefix: 'kaspiadmin2' });
+    await promoteAdmin(admin.user.id);
+    const orderId = 'TRASSA-TEST-' + Date.now();
+    const { rows } = await pool.query(
+      "INSERT INTO payments (user_id, order_id, tier, amount, status, provider) VALUES ($1,$2,'basic',9000,'paid','manual_kaspi') RETURNING id",
+      [user.id, orderId]
+    );
+    const r = await api('/api/admin/payments/' + rows[0].id + '/confirm', { method: 'POST', headers: { Authorization: 'Bearer ' + admin.token } });
     assert.equal(r.status, 404);
   });
 });

@@ -81,17 +81,72 @@ res.status(500).type('application/xml').send(xml('error', 'Server error'));
 }
 });
 
-// Статус конкретного заказа — фронтенд опрашивает после возврата с платёжной страницы,
-// чтобы показать "оплата обрабатывается" / "подписка активирована".
-router.get('/paybox/:orderId', authMiddleware, async (req, res) => {
+// ─── Ручной перевод на Kaspi Gold ────────────────────────────────────────────
+// Пока у владельца Трассы нет ИП/самозанятости, реальные агрегаторы (PayBox и т.п.)
+// недоступны — KYC у них требует юр. статус. Временное решение: пользователь переводит
+// деньги напрямую на личный Kaspi Gold, указывая order_id как код перевода, а админ
+// подтверждает оплату вручную в админ-панели (см. src/routes/admin.js).
+
+router.post('/manual/create', authMiddleware, async (req, res) => {
 try {
-const { rows } = await pool.query('SELECT status, tier, amount, created_at, paid_at FROM payments WHERE order_id=$1 AND user_id=$2', [req.params.orderId, req.user.id]);
+if (req.user.role !== 'carrier') return res.status(403).json({ error: 'Оплата подписки доступна только перевозчикам' });
+const { tier } = req.body;
+const chosenTier = tier && SUBSCRIPTION_TIERS[tier] ? tier : 'basic';
+const kaspiPhone = process.env.KASPI_PHONE;
+if (!kaspiPhone) return res.status(503).json({ error: 'Оплата временно недоступна', code: 'payments_not_configured' });
+
+const orderId = 'TRASSA-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+const amount = SUBSCRIPTION_TIERS[chosenTier].price;
+
+await pool.query(
+"INSERT INTO payments (user_id, order_id, tier, amount, status, provider) VALUES ($1,$2,$3,$4,'pending','manual_kaspi')",
+[req.user.id, orderId, chosenTier, amount]
+);
+
+res.json({
+ok: true,
+order_id: orderId,
+amount,
+kaspi_phone: kaspiPhone,
+kaspi_name: process.env.KASPI_RECIPIENT_NAME || '',
+comment: orderId,
+});
+} catch (err) {
+console.error(err);
+res.status(500).json({ error: 'Ошибка сервера' });
+}
+});
+
+// Пользователь жмёт "Я оплатил" после перевода — это НЕ активирует подписку само по
+// себе, а только помечает заказ как требующий проверки админом (чтобы он не потерялся
+// в списке "pending", если пользователь просто закрыл вкладку не переведя деньги).
+router.post('/manual/:orderId/mark-paid', authMiddleware, async (req, res) => {
+try {
+const { rows } = await pool.query(
+"UPDATE payments SET user_marked_paid_at=now() WHERE order_id=$1 AND user_id=$2 AND provider='manual_kaspi' AND status='pending' RETURNING id",
+[req.params.orderId, req.user.id]
+);
+if (!rows.length) return res.status(404).json({ error: 'Платёж не найден' });
+res.json({ ok: true });
+} catch (err) {
+console.error(err);
+res.status(500).json({ error: 'Ошибка сервера' });
+}
+});
+
+// Статус конкретного заказа (работает для обоих провайдеров: paybox и manual_kaspi) —
+// фронтенд опрашивает его, чтобы показать "оплата обрабатывается" / "подписка активирована".
+async function orderStatusHandler(req, res) {
+try {
+const { rows } = await pool.query('SELECT status, tier, amount, provider, created_at, paid_at, user_marked_paid_at FROM payments WHERE order_id=$1 AND user_id=$2', [req.params.orderId, req.user.id]);
 if (!rows.length) return res.status(404).json({ error: 'Платёж не найден' });
 res.json(rows[0]);
 } catch (err) {
 console.error(err);
 res.status(500).json({ error: 'Ошибка сервера' });
 }
-});
+}
+router.get('/status/:orderId', authMiddleware, orderStatusHandler);
+router.get('/paybox/:orderId', authMiddleware, orderStatusHandler); // старый путь, оставлен для обратной совместимости
 
 module.exports = router;
