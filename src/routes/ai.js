@@ -82,7 +82,8 @@ FROM users u
 LEFT JOIN user_ratings ur ON ur.user_id = u.id
 WHERE u.role='carrier' AND u.subscription_until > now()
 AND u.id NOT IN (SELECT carrier_id FROM bids WHERE cargo_id=$1)
-LIMIT 100
+ORDER BY COALESCE(ur.avg_overall, u.rating) DESC NULLS LAST, u.completed_deliveries DESC, u.created_at ASC
+LIMIT 500
 `, [req.params.cargoId, cargo.from_city, cargo.to_city]);
 
 const ranked = candidates.map(c => {
