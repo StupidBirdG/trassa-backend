@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
+const pool = require('../db/pool');
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Требуется авторизация' });
@@ -9,10 +10,28 @@ function authMiddleware(req, res, next) {
   const token = header.slice(7);
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
   } catch {
     return res.status(401).json({ error: 'Токен недействителен или истёк' });
   }
+
+  // Проверка бана (2026-07-09, вместе с админ-панелью) — без этого забаненный
+  // пользователь с ещё не истёкшим токеном (до 30 дней) мог бы продолжать
+  // действовать. Один запрос по индексированному PK — дёшево.
+  try {
+    const { rows } = await pool.query('SELECT banned, banned_reason, is_admin FROM users WHERE id=$1', [req.user.id]);
+    if (!rows.length) return res.status(401).json({ error: 'Пользователь не найден' });
+    if (rows[0].banned) return res.status(403).json({ error: 'Аккаунт заблокирован' + (rows[0].banned_reason ? ': ' + rows[0].banned_reason : ''), code: 'account_banned' });
+    req.user.is_admin = rows[0].is_admin;
+    next();
+  } catch (e) {
+    console.error('authMiddleware ban-check error:', e.message);
+    next(); // при сбое БД не блокируем весь сайт из-за проверки бана
+  }
+}
+
+function adminMiddleware(req, res, next) {
+  if (!req.user || !req.user.is_admin) return res.status(403).json({ error: 'Требуются права администратора' });
+  next();
 }
 
 function signToken(user) {
@@ -23,4 +42,4 @@ function signToken(user) {
   );
 }
 
-module.exports = { authMiddleware, signToken };
+module.exports = { authMiddleware, adminMiddleware, signToken };
