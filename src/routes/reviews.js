@@ -19,6 +19,7 @@ async function recalcRating(userId) {
       NOW()
     FROM reviews
     WHERE reviewee_id = $1
+    GROUP BY reviewee_id
     ON CONFLICT (user_id) DO UPDATE SET
       avg_overall = EXCLUDED.avg_overall,
       avg_punctuality = EXCLUDED.avg_punctuality,
