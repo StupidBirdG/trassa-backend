@@ -227,6 +227,19 @@ created_at TIMESTAMPTZ DEFAULT now()
 )`);
 await pool.query("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)");
 
+// Защита от обхода бана (2026-07-10): забаненного телефона/email/BIN достаточно,
+// чтобы заблокировать повторную регистрацию с теми же данными — раньше такой
+// проверки не было вообще. См. services/banEvasion.js.
+await pool.query(`CREATE TABLE IF NOT EXISTS banned_identifiers (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+type VARCHAR(10) NOT NULL CHECK (type IN ('phone','email','bin')),
+value TEXT NOT NULL,
+source_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+created_at TIMESTAMPTZ DEFAULT now(),
+UNIQUE (type, value)
+)`);
+await pool.query("CREATE INDEX IF NOT EXISTS idx_banned_identifiers_lookup ON banned_identifiers(type, value)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);

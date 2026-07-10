@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { authMiddleware, adminMiddleware } = require('../middleware/auth');
 const { grantReferralReward } = require('../services/referral');
+const { addToBlocklist, removeFromBlocklist } = require('../services/banEvasion');
 
 router.use(authMiddleware, adminMiddleware);
 
@@ -40,6 +41,10 @@ router.put('/users/:id/ban', async (req, res) => {
       [banned === true, banned === true ? (reason || null) : null, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Пользователь не найден' });
+    // Чёрный список телефона/email/BIN — чтобы забаненный не мог просто
+    // зарегистрироваться заново с теми же данными. При разбане список чистится.
+    if (banned === true) await addToBlocklist(req.params.id);
+    else await removeFromBlocklist(req.params.id);
     res.json(rows[0]);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
