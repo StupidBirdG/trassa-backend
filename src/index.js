@@ -11,6 +11,7 @@ const adminRoutes = require("./routes/admin");
 const paymentRoutes = require("./routes/payments");
 const disputeRoutes = require("./routes/disputes");
 const pushRoutes = require("./routes/push");
+const statsRoutes = require("./routes/stats");
 const { notifyAdmin } = require("./services/telegram");
 const pool = require("./db/pool");
 
@@ -267,6 +268,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/disputes", disputeRoutes);
 app.use("/api/push", pushRoutes);
+app.use("/api/stats", statsRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
