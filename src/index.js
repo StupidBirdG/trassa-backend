@@ -150,6 +150,33 @@ created_at TIMESTAMPTZ DEFAULT now(),
 UNIQUE (order_id, reviewer_id)
 )`);
 await pool.query("CREATE INDEX IF NOT EXISTS idx_reviews_reviewee ON reviews(reviewee_id, created_at)");
+
+// FIX (2026-07-10, found via a real admin-panel delete failure — "Ошибка сервера" on
+// DELETE /api/admin/cargos/:id): CREATE TABLE IF NOT EXISTS is a no-op on an existing
+// table, so the ON DELETE CASCADE clauses above never actually applied to production —
+// the table was first created before those clauses existed in this file, and no ALTER
+// ever followed up. Checked pg_constraint directly: ALL THREE foreign keys on reviews
+// (order_id, reviewer_id, reviewee_id) were NO ACTION (confdeltype='a') on prod, not
+// just order_id. So deleting a cargo with an accepted bid that had a review on it
+// cascaded from cargos -> bids but then hit "still referenced from table reviews" and
+// rolled back the whole DELETE. Recreate all three constraints with the correct
+// CASCADE, idempotently (only if not already 'c' cascade) so this doesn't run
+// DROP/ADD on every single boot.
+await pool.query(`DO $$
+BEGIN
+IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reviews_order_id_fkey' AND confdeltype <> 'c') THEN
+ALTER TABLE reviews DROP CONSTRAINT reviews_order_id_fkey;
+ALTER TABLE reviews ADD CONSTRAINT reviews_order_id_fkey FOREIGN KEY (order_id) REFERENCES bids(id) ON DELETE CASCADE;
+END IF;
+IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reviews_reviewer_id_fkey' AND confdeltype <> 'c') THEN
+ALTER TABLE reviews DROP CONSTRAINT reviews_reviewer_id_fkey;
+ALTER TABLE reviews ADD CONSTRAINT reviews_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE CASCADE;
+END IF;
+IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reviews_reviewee_id_fkey' AND confdeltype <> 'c') THEN
+ALTER TABLE reviews DROP CONSTRAINT reviews_reviewee_id_fkey;
+ALTER TABLE reviews ADD CONSTRAINT reviews_reviewee_id_fkey FOREIGN KEY (reviewee_id) REFERENCES users(id) ON DELETE CASCADE;
+END IF;
+END $$;`);
 await pool.query(`CREATE TABLE IF NOT EXISTS user_ratings (
 user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 avg_overall NUMERIC(3,2),

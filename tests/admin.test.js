@@ -95,4 +95,37 @@ describe('admin: cargo moderation', () => {
     const del = await api('/api/admin/cargos/' + cargo.id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + admin.token } });
     assert.equal(del.status, 200);
   });
+
+  // Regression (2026-07-10): found via a real "Ошибка сервера" reported from the admin
+  // panel on a cargo that had gone all the way to delivered + reviewed. CREATE TABLE IF
+  // NOT EXISTS never applied the reviews table's ON DELETE CASCADE to production (the
+  // table predated that clause in the code), so the real constraint was NO ACTION —
+  // deleting the cargo cascaded to its bid, which then hit "still referenced from table
+  // reviews" and rolled back. Fixed in index.js by re-creating the FK constraints with
+  // CASCADE if they aren't already. This exercises the exact failing path end-to-end.
+  test('admin can delete a delivered cargo that has a review left on its accepted bid', async () => {
+    const admin = await makeAdmin('admincargo2');
+    const shipper = await registerUser({ role: 'shipper', prefix: 'admincargo2-shipper' });
+    const carrier = await registerUser({ role: 'carrier', prefix: 'admincargo2-carrier', skip_trial: true });
+
+    const cargo = (await api('/api/cargos', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + shipper.token },
+      body: { from_city: 'RevFixA', to_city: 'RevFixB', weight_tons: 5, cargo_type: 'General', pickup_date: '2026-08-01', price: 100000 },
+    })).data;
+    const bid = (await api('/api/cargos/' + cargo.id + '/bids', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + carrier.token },
+      body: { truck_type: 'Тент 20т', price: 90000 },
+    })).data;
+    await api('/api/cargos/' + cargo.id + '/accept/' + bid.id, { method: 'POST', headers: { Authorization: 'Bearer ' + shipper.token } });
+    await api('/api/cargos/' + cargo.id + '/deliver', { method: 'POST', headers: { Authorization: 'Bearer ' + shipper.token } });
+
+    const review = await api('/api/reviews', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + shipper.token },
+      body: { order_id: bid.id, rating_overall: 5, comment: 'Отлично' },
+    });
+    assert.equal(review.status, 201, 'review should be accepted: ' + JSON.stringify(review.data));
+
+    const del = await api('/api/admin/cargos/' + cargo.id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + admin.token } });
+    assert.equal(del.status, 200, 'delete should succeed even when a review references the accepted bid: ' + JSON.stringify(del.data));
+  });
 });
