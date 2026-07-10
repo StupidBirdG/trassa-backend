@@ -12,6 +12,7 @@ const paymentRoutes = require("./routes/payments");
 const disputeRoutes = require("./routes/disputes");
 const pushRoutes = require("./routes/push");
 const statsRoutes = require("./routes/stats");
+const verificationRoutes = require("./routes/verification");
 const { notifyAdmin } = require("./services/telegram");
 const pool = require("./db/pool");
 
@@ -240,6 +241,27 @@ UNIQUE (type, value)
 )`);
 await pool.query("CREATE INDEX IF NOT EXISTS idx_banned_identifiers_lookup ON banned_identifiers(type, value)");
 
+// Верификация документами вместо "честного слова" (2026-07-10): раньше "verified"
+// был флагом, который админ ставил без единого доказательства. Теперь пользователь
+// загружает фото документа, админ реально смотрит на него перед подтверждением.
+// Файл — BYTEA прямо в Postgres: на Railway файловая система эфемерна (пропадает
+// при передеплое), а объём тут маленький (несколько фото на модерацию за раз),
+// так что заводить отдельное объектное хранилище (S3 и т.п.) избыточно.
+await pool.query(`CREATE TABLE IF NOT EXISTS verification_documents (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+doc_type VARCHAR(20) NOT NULL CHECK (doc_type IN ('id_card','drivers_license','vehicle_passport','company_cert')),
+file_data BYTEA NOT NULL,
+mime_type VARCHAR(50) NOT NULL,
+status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+reviewed_by UUID REFERENCES users(id),
+reviewed_at TIMESTAMPTZ,
+rejection_reason TEXT,
+created_at TIMESTAMPTZ DEFAULT now()
+)`);
+await pool.query("CREATE INDEX IF NOT EXISTS idx_verification_docs_user ON verification_documents(user_id, created_at)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_verification_docs_status ON verification_documents(status, created_at)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);
@@ -255,7 +277,9 @@ if (req.method === "OPTIONS") return res.sendStatus(200);
 next();
 });
 
-app.use(express.json());
+// Лимит поднят с дефолтных 100kb — фото документов на верификацию (права,
+// техпаспорт) в base64 внутри JSON легко превышают это (см. routes/verification.js).
+app.use(express.json({ limit: "10mb" }));
 // PayBox шлёт callback как form-urlencoded, не JSON — нужен отдельный парсер.
 app.use(express.urlencoded({ extended: true }));
 app.use("/api/auth/send-code", rateLimit({ windowMs: 60000, max: 20 }));
@@ -282,6 +306,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/disputes", disputeRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/stats", statsRoutes);
+app.use("/api/verification", verificationRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 

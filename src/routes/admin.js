@@ -58,6 +58,60 @@ router.put('/users/:id/verify', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
+// ─── Верификация документами ("документы вместо честного слова", 2026-07-10) ─
+// Ручное подтверждение верификации выше остаётся (например для доверенных
+// партнёров без документов) — этот блок добавляет доказательный путь: админ
+// реально смотрит на загруженное фото документа перед тем как поставить галочку.
+
+router.get('/verification-queue', async (req, res) => {
+  try {
+    const { status } = req.query;
+    const st = ['pending', 'approved', 'rejected'].includes(status) ? status : 'pending';
+    const { rows } = await pool.query(`
+      SELECT vd.id, vd.doc_type, vd.status, vd.mime_type, vd.rejection_reason, vd.created_at, vd.reviewed_at,
+             u.id AS user_id, u.name AS user_name, u.company_name, u.role, u.email, u.phone
+      FROM verification_documents vd JOIN users u ON u.id = vd.user_id
+      WHERE vd.status=$1
+      ORDER BY vd.created_at ASC
+      LIMIT 100
+    `, [st]);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+// Отдаёт сам файл (для просмотра в админке — <img src> или открыть PDF).
+router.get('/verification/:id/file', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT file_data, mime_type FROM verification_documents WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Документ не найден' });
+    res.setHeader('Content-Type', rows[0].mime_type);
+    res.send(rows[0].file_data);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/verification/:id/approve', async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM verification_documents WHERE id=$1 AND status='pending'", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Документ не найден или уже обработан' });
+    const doc = rows[0];
+    await pool.query("UPDATE verification_documents SET status='approved', reviewed_by=$1, reviewed_at=now() WHERE id=$2", [req.user.id, doc.id]);
+    await pool.query('UPDATE users SET verified=TRUE WHERE id=$1', [doc.user_id]);
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/verification/:id/reject', async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const { rows } = await pool.query(
+      "UPDATE verification_documents SET status='rejected', reviewed_by=$1, reviewed_at=now(), rejection_reason=$2 WHERE id=$3 AND status='pending' RETURNING id",
+      [req.user.id, reason || null, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Документ не найден или уже обработан' });
+    res.json({ ok: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 // ─── Грузы ──────────────────────────────────────────────────────────────────
 
 router.get('/cargos', async (req, res) => {
