@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
 const { authMiddleware, adminMiddleware } = require('../middleware/auth');
+const { grantReferralReward } = require('../services/referral');
 
 router.use(authMiddleware, adminMiddleware);
 
@@ -118,6 +119,7 @@ router.post('/payments/:id/confirm', async (req, res) => {
     const base = sameTier ? 'subscription_until' : 'now()';
     await pool.query('UPDATE users SET subscription_until = ' + base + " + interval '30 days', subscription_tier=$2 WHERE id=$1", [payment.user_id, payment.tier]);
 
+    await grantReferralReward(pool, payment.user_id);
     res.json({ ok: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });

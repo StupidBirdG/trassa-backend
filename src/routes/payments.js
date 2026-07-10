@@ -6,6 +6,7 @@ const { authMiddleware } = require('../middleware/auth');
 const paybox = require('../services/paybox');
 const { SUBSCRIPTION_TIERS } = require('./auth');
 const { notifyAdmin } = require('../services/telegram');
+const { grantReferralReward } = require('../services/referral');
 
 // Создаёт заказ на оплату подписки и возвращает ссылку на платёжную страницу PayBox
 // (там пользователь увидит Kaspi QR среди способов оплаты). Реальная активация тарифа
@@ -70,6 +71,7 @@ const stillActive = cur && new Date(cur) > new Date();
 const sameTier = stillActive && userRows[0].subscription_tier === payment.tier;
 const base = sameTier ? 'subscription_until' : 'now()';
 await pool.query('UPDATE users SET subscription_until = ' + base + " + interval '30 days', subscription_tier=$2 WHERE id=$1", [payment.user_id, payment.tier]);
+await grantReferralReward(pool, payment.user_id);
 }
 } else if (payment.status === 'pending') {
 await pool.query("UPDATE payments SET status='failed' WHERE id=$1", [payment.id]);
