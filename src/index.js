@@ -10,6 +10,7 @@ const aiRoutes = require("./routes/ai");
 const adminRoutes = require("./routes/admin");
 const paymentRoutes = require("./routes/payments");
 const disputeRoutes = require("./routes/disputes");
+const pushRoutes = require("./routes/push");
 const { notifyAdmin } = require("./services/telegram");
 const pool = require("./db/pool");
 
@@ -185,6 +186,19 @@ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_reward_giv
 await pool.query("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)");
 await pool.query("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)");
 
+// Web Push (2026-07-10): уведомление о новом грузе без Telegram — используя уже готовую
+// PWA (manifest.json/sw.js). endpoint уникален на подписку браузера/устройства; один
+// пользователь может иметь несколько (телефон + компьютер).
+await pool.query(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+endpoint TEXT UNIQUE NOT NULL,
+p256dh TEXT NOT NULL,
+auth TEXT NOT NULL,
+created_at TIMESTAMPTZ DEFAULT now()
+)`);
+await pool.query("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);
@@ -225,6 +239,7 @@ app.use("/api/ai", aiRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/disputes", disputeRoutes);
+app.use("/api/push", pushRoutes);
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 

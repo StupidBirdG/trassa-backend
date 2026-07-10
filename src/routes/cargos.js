@@ -5,6 +5,7 @@ const { authMiddleware } = require('../middleware/auth');
 const { notifyByUserId, notifyAllCarriers } = require('../services/telegram');
 const { grantReferralReward } = require('../services/referral');
 const { streamDeliveryAct } = require('../services/act');
+const push = require('../services/push');
 
 router.use(authMiddleware);
 
@@ -101,6 +102,7 @@ const { rows } = await pool.query(
 );
 await pool.query('INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2)', [rows[0].id, 'Груз опубликован на бирже']);
 notifyAllCarriers(pool, rows[0]).catch(() => {});
+push.notifyCarriersOfNewCargo(pool, rows[0]).catch(() => {});
 // Награда за реферала-шиппера: у грузовладельцев нет подписки, поэтому первый
 // реально размещённый груз — единственный содержательный сигнал вовлечённости
 // (не просто регистрация). grantReferralReward сам проверяет флаг и no-op'ит,
