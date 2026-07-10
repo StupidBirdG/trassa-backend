@@ -6,6 +6,7 @@ const { notifyByUserId, notifyAllCarriers } = require('../services/telegram');
 const { grantReferralReward } = require('../services/referral');
 const { streamDeliveryAct } = require('../services/act');
 const push = require('../services/push');
+const antiAbuse = require('../services/antiAbuse');
 
 router.use(authMiddleware);
 
@@ -93,6 +94,8 @@ if (!pickup_date) missingFields.push('pickup_date');
 if (missingFields.length) return res.status(400).json({ error: 'Не заполнены обязательные поля: ' + missingFields.join(', ') + '. Обязательны: from_city, to_city, weight_tons (число, тонны), cargo_type (строка), pickup_date (YYYY-MM-DD). Необязательны: price, volume_m3, comment.', missing_fields: missingFields });
 if (isNaN(Number(weight_tons)) || Number(weight_tons) <= 0) return res.status(400).json({ error: 'weight_tons должен быть положительным числом' });
 if (isNaN(Date.parse(pickup_date))) return res.status(400).json({ error: 'pickup_date должен быть в формате YYYY-MM-DD' });
+const dailyLimit = await antiAbuse.checkDailyCargoLimit(req.user.id, req.user.created_at);
+if (!dailyLimit.allowed) return res.status(429).json({ error: dailyLimit.error, code: dailyLimit.code });
 const priceOnRequest = !price;
 const vol = volume_m3 ? Number(volume_m3) : null;
 try {
@@ -176,6 +179,8 @@ free_bids_limit: FREE_BIDS_PER_MONTH
 }
 const { truck_type, price } = req.body;
 if (!truck_type || !price) return res.status(400).json({ error: 'Укажите truck_type и price' });
+const dailyLimit = await antiAbuse.checkDailyBidLimit(req.user.id, req.user.created_at);
+if (!dailyLimit.allowed) return res.status(429).json({ error: dailyLimit.error, code: dailyLimit.code });
 try {
 const { rows: cargo } = await pool.query('SELECT * FROM cargos WHERE id=$1', [req.params.id]);
 if (!cargo.length) return res.status(404).json({ error: 'Груз не найден' });
