@@ -7,6 +7,7 @@ const { sendTelegramCode, processUpdates, getChatIdByPhone } = require("../servi
 const { sendWhatsApp } = require("../services/whatsapp");
 const { authMiddleware, signToken } = require("../middleware/auth");
 const { getOrCreateReferralCode, resolveReferrer } = require("../services/referral");
+const { isBlocked } = require("../services/banEvasion");
 
 function normalizePhone(raw) {
 let d = raw.replace(/\D/g, "");
@@ -116,6 +117,13 @@ await pool.query("UPDATE users SET phone_verified=TRUE, role=$2, name=$3, compan
 const { rows } = await pool.query("SELECT * FROM users WHERE phone=$1", [normalized]);
 return res.status(200).json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0]) });
 }
+// Обход бана (2026-07-10): этот телефон принадлежал ранее забаненному аккаунту —
+// не даём создать новый с теми же данными. Проверяем только для НОВОГО номера
+// (exists.rows.length===0 выше) — если номер уже привязан к существующей строке,
+// еёban-флаг и так блокирует использование через authMiddleware.
+if (await isBlocked("phone", normalized)) {
+return res.status(403).json({ error: "Регистрация с этими данными невозможна", code: "identifier_banned" });
+}
 let newUser;
 if (role === "carrier") {
 const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until,terms_accepted_at,terms_version,referred_by) VALUES ($1,TRUE,$2,$3,$4,now() + ($5 || ' days')::interval,now(),$6,$7) RETURNING *", [normalized, role, name.trim(), co, trialDays, TERMS_VERSION, referrerId]);
@@ -142,6 +150,9 @@ const normalized = normalizeEmail(email);
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return res.status(400).json({ error: "Неверный формат email" });
 const exists = await pool.query("SELECT id FROM users WHERE email=$1", [normalized]);
 if (exists.rows.length > 0) return res.status(400).json({ error: "Этот email уже зарегистрирован" });
+if (await isBlocked("email", normalized)) {
+return res.status(403).json({ error: "Регистрация с этими данными невозможна", code: "identifier_banned" });
+}
 const co = company_name ? company_name.trim() : null;
 const hash = await bcrypt.hash(password, 10);
 const referrerId = ref ? await resolveReferrer(pool, ref) : null;
@@ -298,6 +309,9 @@ updates.push("bin_verified=$"+i); i++; vals.push(false);
 const trimmedBin = String(bin).trim();
 const isValid = validateBinChecksum(trimmedBin);
 if (!isValid) return res.status(400).json({ error: "Некорректный БИН (не проходит проверку контрольной суммы)" });
+if (await isBlocked("bin", trimmedBin)) {
+return res.status(403).json({ error: "Этот БИН заблокирован", code: "identifier_banned" });
+}
 updates.push("bin=$"+i); i++; vals.push(trimmedBin);
 updates.push("bin_verified=$"+i); i++; vals.push(true);
 }
@@ -338,6 +352,9 @@ const valid = await verifySmsCode(pool, normalized, code);
 if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
 const taken = await pool.query("SELECT id FROM users WHERE phone=$1 AND id<>$2", [normalized, req.user.id]);
 if (taken.rows.length > 0) return res.status(400).json({ error: "Этот телефон уже используется другим аккаунтом" });
+if (await isBlocked("phone", normalized)) {
+return res.status(403).json({ error: "Регистрация с этими данными невозможна", code: "identifier_banned" });
+}
 const { rows } = await pool.query("UPDATE users SET phone=$1, phone_verified=TRUE WHERE id=$2 RETURNING *", [normalized, req.user.id]);
 res.json({ ok: true, user: sanitizeUser(rows[0]) });
 } catch(err) {
