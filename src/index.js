@@ -176,6 +176,15 @@ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFA
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_reason TEXT");
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at TIMESTAMPTZ");
 
+// Реферальная программа (2026-07-10): дешёвый канал роста без бюджета на рекламу.
+// referral_code генерируется лениво при первом запросе (см. services/referral.js),
+// поэтому бэкфилл существующих пользователей не нужен.
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(12) UNIQUE");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by UUID REFERENCES users(id)");
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_reward_given BOOLEAN DEFAULT FALSE");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);

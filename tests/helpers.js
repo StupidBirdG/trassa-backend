@@ -28,10 +28,11 @@ async function api(path, options = {}) {
 }
 
 // Регистрирует shipper/carrier с agreed_terms:true (иначе 400 после введения консента).
-async function registerUser({ role = 'shipper', prefix = role, skip_trial } = {}) {
+async function registerUser({ role = 'shipper', prefix = role, skip_trial, ref } = {}) {
   const email = uniqueEmail(prefix);
   const body = { email, password: 'Test123456!', name: prefix, role, agreed_terms: true };
   if (skip_trial !== undefined) body.skip_trial = skip_trial;
+  if (ref !== undefined) body.ref = ref;
   const r = await api('/api/auth/register-email', { method: 'POST', body });
   if (!r.ok) throw new Error('registerUser failed: ' + JSON.stringify(r.data));
   return { email, token: r.data.token, user: r.data.user };

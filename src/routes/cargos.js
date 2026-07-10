@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
 const { notifyByUserId, notifyAllCarriers } = require('../services/telegram');
+const { grantReferralReward } = require('../services/referral');
 
 router.use(authMiddleware);
 
@@ -99,6 +100,11 @@ const { rows } = await pool.query(
 );
 await pool.query('INSERT INTO tracking_events (cargo_id, label) VALUES ($1,$2)', [rows[0].id, 'Груз опубликован на бирже']);
 notifyAllCarriers(pool, rows[0]).catch(() => {});
+// Награда за реферала-шиппера: у грузовладельцев нет подписки, поэтому первый
+// реально размещённый груз — единственный содержательный сигнал вовлечённости
+// (не просто регистрация). grantReferralReward сам проверяет флаг и no-op'ит,
+// если награда уже выдана или реферер отсутствует — дёшево дёргать на каждый груз.
+await grantReferralReward(pool, req.user.id);
 res.status(201).json({ ...rows[0], bids: [] });
 } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка создания груза' }); }
 });
