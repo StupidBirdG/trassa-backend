@@ -4,6 +4,7 @@ const pool = require('../db/pool');
 const { authMiddleware } = require('../middleware/auth');
 const { notifyByUserId, notifyAllCarriers } = require('../services/telegram');
 const { grantReferralReward } = require('../services/referral');
+const { streamDeliveryAct } = require('../services/act');
 
 router.use(authMiddleware);
 
@@ -265,6 +266,47 @@ try {
 const { rows } = await pool.query('SELECT label, created_at FROM tracking_events WHERE cargo_id=$1 ORDER BY created_at ASC', [req.params.id]);
 res.json(rows);
 } catch (err) { res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+// Акт о выполненной перевозке (PDF) — реальная бухгалтерская потребность в КЗ.
+// Доступен только сторонам сделки (владелец груза / принятый перевозчик), и только
+// после доставки — до этого момента акту нечего подтверждать.
+router.get('/:id/act', async (req, res) => {
+try {
+const { rows: cargoRows } = await pool.query('SELECT * FROM cargos WHERE id=$1', [req.params.id]);
+if (!cargoRows.length) return res.status(404).json({ error: 'Груз не найден' });
+const cargo = cargoRows[0];
+if (cargo.status !== 'delivered') return res.status(400).json({ error: 'Акт доступен только после доставки груза' });
+
+let bid = null;
+if (cargo.accepted_bid_id) {
+const { rows: bidRows } = await pool.query('SELECT * FROM bids WHERE id=$1', [cargo.accepted_bid_id]);
+bid = bidRows[0] || null;
+}
+const carrierId = bid ? bid.carrier_id : null;
+if (cargo.owner_id !== req.user.id && carrierId !== req.user.id) {
+return res.status(403).json({ error: 'Акт доступен только сторонам сделки' });
+}
+
+const { rows: shipperRows } = await pool.query('SELECT name, company_name, phone, email, bin, bin_verified FROM users WHERE id=$1', [cargo.owner_id]);
+const shipper = shipperRows[0];
+let carrier = null;
+if (carrierId) {
+const { rows: carrierRows } = await pool.query('SELECT name, company_name, phone, email, bin, bin_verified, truck_number FROM users WHERE id=$1', [carrierId]);
+carrier = carrierRows[0];
+}
+if (!carrier) return res.status(400).json({ error: 'Не удалось определить перевозчика по сделке' });
+
+const { rows: eventRows } = await pool.query(
+"SELECT created_at FROM tracking_events WHERE cargo_id=$1 AND label ILIKE 'Доставлено%' ORDER BY created_at DESC LIMIT 1",
+[cargo.id]
+);
+const deliveredAt = eventRows[0] ? eventRows[0].created_at : null;
+
+res.setHeader('Content-Type', 'application/pdf');
+res.setHeader('Content-Disposition', 'inline; filename="act-' + cargo.id.slice(0, 8) + '.pdf"');
+streamDeliveryAct({ cargo, bid, shipper, carrier, deliveredAt }, res);
+} catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
 module.exports = router;
