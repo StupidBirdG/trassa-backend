@@ -15,7 +15,9 @@ function isConfigured() {
   return !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 }
 
-// Уведомляет всех перевозчиков с активной подпиской и рабочей push-подпиской о новом грузе.
+// Уведомляет перевозчиков с активной подпиской тарифа Pro/Business и рабочей
+// push-подпиской о новом грузе (2026-07-10: push — реальный платный перк, а не
+// доступный всем платящим одинаково — см. распределение фич по тарифам).
 // Мёртвые подписки (410 Gone / 404 — пользователь отписался или удалил приложение) удаляем
 // сразу, чтобы не пытаться слать в них на каждый новый груз.
 async function notifyCarriersOfNewCargo(pool, cargo) {
@@ -25,7 +27,7 @@ async function notifyCarriersOfNewCargo(pool, cargo) {
       `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth
        FROM push_subscriptions ps
        JOIN users u ON u.id = ps.user_id
-       WHERE u.role = 'carrier' AND u.subscription_until > now()`
+       WHERE u.role = 'carrier' AND u.subscription_until > now() AND u.subscription_tier IN ('pro','business')`
     );
     const payload = JSON.stringify({
       title: '🚛 Новый груз на Trassa',

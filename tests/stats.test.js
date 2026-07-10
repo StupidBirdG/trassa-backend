@@ -4,6 +4,11 @@ const { api, registerUser, waitForServer } = require('./helpers');
 
 before(async () => { await waitForServer(); });
 
+async function activateTier(token, tier) {
+  const r = await api('/api/auth/subscription/activate', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { tier } });
+  if (r.status !== 200) throw new Error('activateTier failed: ' + JSON.stringify(r.data));
+}
+
 describe('stats: /api/stats/me shape by role', () => {
   test('carrier with no activity gets zeroed-out stats, not an error', async () => {
     const { token } = await registerUser({ role: 'carrier', prefix: 'statsemptycarrier', skip_trial: true });
@@ -15,6 +20,8 @@ describe('stats: /api/stats/me shape by role', () => {
     assert.equal(r.data.acceptance_rate, 0);
     assert.equal(r.data.total_earnings, 0);
     assert.ok(Array.isArray(r.data.monthly_earnings));
+    // Помесячный график — перк тарифов Pro/Business; без активной подписки заблокирован.
+    assert.equal(r.data.monthly_earnings_locked, true);
   });
 
   test('shipper with no activity gets zeroed-out stats, not an error', async () => {
@@ -33,10 +40,34 @@ describe('stats: /api/stats/me shape by role', () => {
   });
 });
 
+describe('stats: monthly chart gated to Pro/Business tier', () => {
+  test('a basic-tier carrier sees monthly_earnings_locked:true and an empty array', async () => {
+    const { token } = await registerUser({ role: 'carrier', prefix: 'statslockedbasic' }); // default trial -> tier 'basic'
+    const r = await api('/api/stats/me', { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(r.data.monthly_earnings_locked, true);
+    assert.deepEqual(r.data.monthly_earnings, []);
+  });
+
+  test('a pro-tier carrier sees monthly_earnings_locked:false', async () => {
+    const { token } = await registerUser({ role: 'carrier', prefix: 'statsunlockedpro', skip_trial: true });
+    await activateTier(token, 'pro');
+    const r = await api('/api/stats/me', { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(r.data.monthly_earnings_locked, false);
+  });
+
+  test("shipper's monthly_spending is never gated (shippers have no paid tier)", async () => {
+    const { token } = await registerUser({ role: 'shipper', prefix: 'statsshipperunlocked' });
+    const r = await api('/api/stats/me', { headers: { Authorization: 'Bearer ' + token } });
+    assert.equal(r.data.monthly_earnings_locked, undefined);
+    assert.ok(Array.isArray(r.data.monthly_spending));
+  });
+});
+
 describe('stats: real numbers after a full delivered cargo', () => {
-  test('carrier earnings and acceptance rate reflect an actually delivered cargo', async () => {
+  test('carrier earnings, acceptance rate, and monthly chart (Pro tier) reflect an actually delivered cargo', async () => {
     const shipper = await registerUser({ role: 'shipper', prefix: 'statsflow-shipper' });
     const carrier = await registerUser({ role: 'carrier', prefix: 'statsflow-carrier', skip_trial: true });
+    await activateTier(carrier.token, 'pro');
 
     const cargoRes = await api('/api/cargos', {
       method: 'POST', headers: { Authorization: 'Bearer ' + shipper.token },
