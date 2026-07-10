@@ -14,9 +14,15 @@ describe('push: vapid-public-key without configured VAPID keys', () => {
   });
 });
 
+async function activateTier(token, tier) {
+  const r = await api('/api/auth/subscription/activate', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { tier } });
+  if (r.status !== 200) throw new Error('activateTier failed: ' + JSON.stringify(r.data));
+}
+
 describe('push: subscribe/unsubscribe', () => {
   test('subscribing with an incomplete payload -> 400', async () => {
     const { token } = await registerUser({ role: 'carrier', prefix: 'pushbad' });
+    await activateTier(token, 'pro');
     const r = await api('/api/push/subscribe', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { endpoint: 'https://example.com/ep' } });
     assert.equal(r.status, 400);
   });
@@ -26,8 +32,24 @@ describe('push: subscribe/unsubscribe', () => {
     assert.equal(r.status, 401);
   });
 
-  test('subscribe stores a row, re-subscribing the same endpoint upserts rather than duplicating', async () => {
+  // Push — перк тарифов Pro/Business (2026-07-10), не всех платящих одинаково.
+  test('a basic-tier carrier cannot subscribe to push -> 403 requires_pro_tier', async () => {
+    const { token } = await registerUser({ role: 'carrier', prefix: 'pushbasic' }); // default trial registration -> tier 'basic'
+    const r = await api('/api/push/subscribe', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { endpoint: 'https://example.com/basic-' + Date.now(), keys: { p256dh: 'p', auth: 'a' } } });
+    assert.equal(r.status, 403);
+    assert.equal(r.data.code, 'requires_pro_tier');
+  });
+
+  test('a carrier with no active subscription at all cannot subscribe to push -> 403', async () => {
+    const { token } = await registerUser({ role: 'carrier', prefix: 'pushnosub', skip_trial: true });
+    const r = await api('/api/push/subscribe', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { endpoint: 'https://example.com/nosub-' + Date.now(), keys: { p256dh: 'p', auth: 'a' } } });
+    assert.equal(r.status, 403);
+    assert.equal(r.data.code, 'requires_pro_tier');
+  });
+
+  test('a pro-tier carrier can subscribe, re-subscribing the same endpoint upserts rather than duplicating', async () => {
     const { token, user } = await registerUser({ role: 'carrier', prefix: 'pushok' });
+    await activateTier(token, 'pro');
     const endpoint = 'https://fcm.googleapis.com/fcm/send/test-' + Date.now();
     const body = { endpoint, keys: { p256dh: 'p256dh-value', auth: 'auth-value' } };
 
@@ -41,8 +63,17 @@ describe('push: subscribe/unsubscribe', () => {
     assert.equal(rows[0].user_id, user.id);
   });
 
+  test('a business-tier carrier can also subscribe', async () => {
+    const { token } = await registerUser({ role: 'carrier', prefix: 'pushbiz' });
+    await activateTier(token, 'business');
+    const endpoint = 'https://fcm.googleapis.com/fcm/send/biz-' + Date.now();
+    const r = await api('/api/push/subscribe', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { endpoint, keys: { p256dh: 'p', auth: 'a' } } });
+    assert.equal(r.status, 200);
+  });
+
   test('unsubscribe removes the row, only for the owning user', async () => {
     const { token, user } = await registerUser({ role: 'carrier', prefix: 'pushunsub' });
+    await activateTier(token, 'pro');
     const other = await registerUser({ role: 'carrier', prefix: 'pushother' });
     const endpoint = 'https://fcm.googleapis.com/fcm/send/unsub-' + Date.now();
     await api('/api/push/subscribe', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: { endpoint, keys: { p256dh: 'p', auth: 'a' } } });

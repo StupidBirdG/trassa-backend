@@ -13,11 +13,16 @@ router.get('/me', async (req, res) => {
 try {
 const userId = req.user.id;
 const { rows: userRows } = await pool.query(
-'SELECT role, completed_deliveries, created_at FROM users WHERE id=$1',
+'SELECT role, completed_deliveries, created_at, subscription_until, subscription_tier FROM users WHERE id=$1',
 [userId]
 );
 if (!userRows.length) return res.status(404).json({ error: 'Не найден' });
 const me = userRows[0];
+// Расширенная аналитика (график по месяцам) — перк тарифов Pro/Business, а не
+// всех платящих одинаково (2026-07-10, см. распределение фич по тарифам).
+// Итоговые цифры (total_earnings и т.п.) остаются доступны всем — гейтится
+// только помесячная разбивка.
+const hasProAccess = me.subscription_until && new Date(me.subscription_until) > new Date() && ['pro', 'business'].includes(me.subscription_tier);
 
 const { rows: ratingRows } = await pool.query(
 'SELECT avg_overall, avg_punctuality, avg_cargo, avg_communication, total_reviews FROM user_ratings WHERE user_id=$1',
@@ -39,7 +44,9 @@ FROM bids b JOIN cargos c ON c.id = b.cargo_id
 WHERE b.carrier_id=$1 AND b.status='accepted' AND c.status='delivered'`,
 [userId]
 );
-const { rows: monthly } = await pool.query(
+let monthly = [];
+if (hasProAccess) {
+const { rows } = await pool.query(
 `SELECT to_char(date_trunc('month', c.created_at), 'YYYY-MM') AS month, SUM(b.price)::numeric AS total
 FROM bids b JOIN cargos c ON c.id = b.cargo_id
 WHERE b.carrier_id=$1 AND b.status='accepted' AND c.status='delivered'
@@ -47,6 +54,8 @@ AND c.created_at >= date_trunc('month', now()) - interval '5 months'
 GROUP BY 1 ORDER BY 1`,
 [userId]
 );
+monthly = rows;
+}
 const bids = bidStats[0];
 res.json({
 role: 'carrier',
@@ -57,6 +66,7 @@ bids_accepted: bids.bids_accepted,
 acceptance_rate: bids.bids_sent ? Math.round((bids.bids_accepted / bids.bids_sent) * 100) : 0,
 total_earnings: Number(earningsRows[0].total_earnings),
 monthly_earnings: monthly.map(m => ({ month: m.month, total: Number(m.total) })),
+monthly_earnings_locked: !hasProAccess,
 });
 } else {
 const { rows: cargoStats } = await pool.query(
