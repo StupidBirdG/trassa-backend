@@ -30,7 +30,7 @@ function streamDeliveryAct({ cargo, bid, shipper, carrier, deliveredAt }, outStr
 
   doc.font(FONT_BOLD).fontSize(16).text('АКТ О ВЫПОЛНЕННОЙ ПЕРЕВОЗКЕ ГРУЗА', { align: 'center' });
   doc.moveDown(0.3);
-  doc.font(FONT_REGULAR).fontSize(10).fillColor('#555').text('Сформировано автоматически на платформе Trassa (trassa-frontend-zti8.vercel.app)', { align: 'center' });
+  doc.font(FONT_REGULAR).fontSize(10).fillColor('#555').text('Сформировано автоматически на платформе Trassa (trassakz.com)', { align: 'center' });
   doc.fillColor('#000');
   doc.moveDown(1);
 

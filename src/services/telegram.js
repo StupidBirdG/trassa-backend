@@ -96,7 +96,7 @@ const text = '🚛 Новый груз на ТРАССА!\n' +
 '📍 ' + cargo.from_city + ' → ' + cargo.to_city + '\n' +
 '⚖️ ' + cargo.weight_tons + ' т · ' + cargo.cargo_type + '\n' +
 (cargo.price ? '💰 ' + Number(cargo.price).toLocaleString('ru-RU') + ' ₸\n' : '💬 Цена по запросу\n') +
-'\nОткликнитесь на сайте: https://trassa-frontend-zti8.vercel.app';
+'\nОткликнитесь на сайте: https://trassakz.com';
 for (const row of rows) {
 sendNotification(row.telegram_chat_id, text).catch(() => {});
 }

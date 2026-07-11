@@ -46,14 +46,14 @@ const HASHTAG_POOL = [
 export function buildChannelPost(fact, angleIndex) {
   const hook = HOOKS[angleIndex];
   const cta = CTAS[angleIndex];
-  return `${hook}\n\n${cta} ${fact}.\n\n🚛 trassa-frontend-zti8.vercel.app`;
+  return `${hook}\n\n${cta} ${fact}.\n\n🚛 trassakz.com`;
 }
 
 export function buildInstagramCaption(fact, angleIndex, factIndex) {
   const hook = HOOKS[angleIndex];
   const cta = CTAS[angleIndex];
   const hashtags = HASHTAG_POOL[factIndex].join(' ');
-  return `${hook}\n\n${cta} ${fact}.\n\n📲 trassa-frontend-zti8.vercel.app\n\n${hashtags}\n\n[Кадр: скриншот ленты грузов в приложении Trassa на телефоне]`;
+  return `${hook}\n\n${cta} ${fact}.\n\n📲 trassakz.com\n\n${hashtags}\n\n[Кадр: скриншот ленты грузов в приложении Trassa на телефоне]`;
 }
 
 export function buildReelsScript(fact, angleIndex) {
@@ -62,6 +62,6 @@ export function buildReelsScript(fact, angleIndex) {
 0-2с: экранкаст телефона — открывается лента грузов в приложении Trassa
 3-10с: палец скроллит карточки грузов, видно города/маршруты, субтитр — "${fact}"
 10-18с: крупный план на кнопку отклика / нужный элемент интерфейса, подтверждающий этот факт
-18-25с: текст на экране — "trassa-frontend-zti8.vercel.app", логотип/иконка приложения
+18-25с: текст на экране — "trassakz.com", логотип/иконка приложения
 (Читается без звука — весь смысл в субтитрах на экране, никакой постановки с актёрами)`;
 }
