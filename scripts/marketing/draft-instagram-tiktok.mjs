@@ -3,44 +3,31 @@
 // одобрения, а неофициальный логин/пароль реально рискует баном аккаунта
 // (сознательно отклонено, см. PRODUCTION-STATE.md п.49). Просто присылает
 // готовый текст владельцу в личку в Telegram, публикация — вручную.
-import { pickTopic, FORBIDDEN } from './facts-angles.mjs';
-import { askClaude } from './claude.mjs';
+//
+// Текст — детерминированные шаблоны (templates.mjs), не вызов LLM (тот же повод,
+// что и у post-telegram-channel.mjs — нет баланса на прямые Anthropic API-запросы,
+// решили не тратить бюджет ради этого).
+import { pickTopic } from './facts-angles.mjs';
+import { buildInstagramCaption, buildReelsScript } from './templates.mjs';
 import { sendTelegramMessage } from './telegram.mjs';
 
 // Сдвиг +37 — чтобы тема дня не совпадала 1-в-1 с постом в публичном канале
 // (тот же пул фактов/углов, другой день цикла).
-const { fact, angle, idx } = pickTopic(37);
+const { fact, angle, idx, angleIndex, factIndex } = pickTopic(37);
 
-const system = `Ты — маркетинговый копирайтер Trassa (биржа грузоперевозок в Казахстане,
-trassa-frontend-zti8.vercel.app). Пиши честно: только про реально работающие на проде
-фичи, без вранья и без хайпа про AI ради AI. Тон дружелюбный, упор на деньги/время
-пользователя. Никогда не упоминай: ${FORBIDDEN.join('; ')}.`;
+const caption = buildInstagramCaption(fact, angleIndex, factIndex);
+const reels = buildReelsScript(fact, angleIndex);
 
-const user = `Нужны ДВА блока текста для Instagram и TikTok/Reels на тему дня.
-Факт продукта: "${fact}".
-Маркетинговый угол/боль: "${angle}".
+const text = `📸 Контент на сегодня (Instagram/TikTok, выкладываешь сам)
 
-БЛОК A — Instagram (caption для карусели/одиночного поста):
-- 3-6 предложений, дружелюбный тон, 1-2 уместных эмодзи
-- 5-8 хэштегов на русском/казахском/английском, релевантных теме
-- Отдельной строкой — подсказка, какой кадр/фото/скриншот подойдёт (только описание, не файл)
-
-БЛОК B — сценарий Reels/TikTok (15-25 секунд, вертикальное видео):
-- Хук в первые 2 секунды (текст на экране + что происходит в кадре)
-- 3-4 бита по временным кодам (что на экране, какой текст/субтитр)
-- Опирается на реальный экранкаст телефона (лента грузов в приложении), не на постановку с актёрами
-- Читается полностью без звука
-
-Ответь строго в формате:
 INSTAGRAM:
-<текст блока A>
+${caption}
 
 REELS/TIKTOK СЦЕНАРИЙ:
-<текст блока B>`;
+${reels}
 
-const body = await askClaude({ system, user, maxTokens: 1500 });
+— Черновик, не публикуется автоматически.`;
 
-const text = `📸 Контент на сегодня (Instagram/TikTok, выкладываешь сам)\n\n${body}\n\n— Черновик, не публикуется автоматически.`;
 console.log(`[idx=${idx}] fact="${fact}" angle="${angle}"\n---\n${text}\n---`);
 
 const result = await sendTelegramMessage({
