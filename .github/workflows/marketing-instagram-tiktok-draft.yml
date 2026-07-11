@@ -1,0 +1,22 @@
+name: Marketing — daily Instagram/TikTok draft (DM only, no auto-post)
+
+on:
+  schedule:
+    # 03:19 UTC = 09:19 Asia/Almaty
+    - cron: '19 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Generate draft and DM owner
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: node scripts/marketing/draft-instagram-tiktok.mjs

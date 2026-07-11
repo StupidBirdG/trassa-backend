@@ -1,0 +1,22 @@
+name: Marketing — daily Telegram channel post
+
+on:
+  schedule:
+    # 03:11 UTC = 09:11 Asia/Almaty
+    - cron: '11 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Generate and publish post
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: node scripts/marketing/post-telegram-channel.mjs
