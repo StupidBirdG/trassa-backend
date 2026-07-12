@@ -262,6 +262,22 @@ created_at TIMESTAMPTZ DEFAULT now()
 await pool.query("CREATE INDEX IF NOT EXISTS idx_verification_docs_user ON verification_documents(user_id, created_at)");
 await pool.query("CREATE INDEX IF NOT EXISTS idx_verification_docs_status ON verification_documents(status, created_at)");
 
+// Учёт обзвонщиков (2026-07-12): у каждого нанятого агента своя ссылка
+// trassakz.com/?agent=CODE — видно, кто из них реально привёл регистрации/
+// грузы/подписки. Осознанно ОТДЕЛЬНАЯ система от referral_code выше — тот
+// механизм начисляет награду (+7 дней) существующему пользователю платформы,
+// а агенты — наёмные сотрудники, им считается сдельная оплата вручную
+// (см. marketing/2026-07-11-vacancy-obzvon.md), не автонаграда внутри продукта.
+await pool.query(`CREATE TABLE IF NOT EXISTS agents (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+name TEXT NOT NULL,
+code VARCHAR(12) UNIQUE NOT NULL,
+active BOOLEAN DEFAULT TRUE,
+created_at TIMESTAMPTZ DEFAULT now()
+)`);
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_code VARCHAR(12) REFERENCES agents(code)");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_users_agent_code ON users(agent_code)");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);

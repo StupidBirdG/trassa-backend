@@ -7,6 +7,7 @@ const { sendTelegramCode, processUpdates, getChatIdByPhone } = require("../servi
 const { sendWhatsApp } = require("../services/whatsapp");
 const { authMiddleware, signToken } = require("../middleware/auth");
 const { getOrCreateReferralCode, resolveReferrer } = require("../services/referral");
+const { resolveAgentCode } = require("../services/agents");
 const { isBlocked } = require("../services/banEvasion");
 
 function normalizePhone(raw) {
@@ -97,7 +98,7 @@ return res.json({ ok: true, token: signToken(rows[0]), user: sanitizeUser(rows[0
 
 router.post("/register", async (req, res) => {
 try {
-const { phone, code, name, role, company_name, agreed_terms, ref } = req.body;
+const { phone, code, name, role, company_name, agreed_terms, ref, agent_code } = req.body;
 if (!phone || !code || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
 if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
 if (agreed_terms !== true) return res.status(400).json({ error: "Необходимо согласиться с условиями использования и политикой конфиденциальности", code: "terms_not_accepted" });
@@ -106,6 +107,7 @@ const valid = await verifySmsCode(pool, normalized, code);
 if (!valid) return res.status(400).json({ error: "Неверный или истёкший код" });
 const co = company_name ? company_name.trim() : null;
 const referrerId = ref ? await resolveReferrer(pool, ref) : null;
+const agentCode = agent_code ? await resolveAgentCode(pool, agent_code) : null;
 const trialDays = referrerId ? 14 : 7; // реферальный бонус: 14 дней пробного вместо 7
 const exists = await pool.query("SELECT id FROM users WHERE phone=$1", [normalized]);
 if (exists.rows.length > 0) {
@@ -126,10 +128,10 @@ return res.status(403).json({ error: "Регистрация с этими да�
 }
 let newUser;
 if (role === "carrier") {
-const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until,terms_accepted_at,terms_version,referred_by) VALUES ($1,TRUE,$2,$3,$4,now() + ($5 || ' days')::interval,now(),$6,$7) RETURNING *", [normalized, role, name.trim(), co, trialDays, TERMS_VERSION, referrerId]);
+const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,subscription_until,terms_accepted_at,terms_version,referred_by,agent_code) VALUES ($1,TRUE,$2,$3,$4,now() + ($5 || ' days')::interval,now(),$6,$7,$8) RETURNING *", [normalized, role, name.trim(), co, trialDays, TERMS_VERSION, referrerId, agentCode]);
 newUser = rows[0];
 } else {
-const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,terms_accepted_at,terms_version,referred_by) VALUES ($1,TRUE,$2,$3,$4,now(),$5,$6) RETURNING *", [normalized, role, name.trim(), co, TERMS_VERSION, referrerId]);
+const { rows } = await pool.query("INSERT INTO users (phone,phone_verified,role,name,company_name,terms_accepted_at,terms_version,referred_by,agent_code) VALUES ($1,TRUE,$2,$3,$4,now(),$5,$6,$7) RETURNING *", [normalized, role, name.trim(), co, TERMS_VERSION, referrerId, agentCode]);
 newUser = rows[0];
 }
 res.status(201).json({ ok: true, token: signToken(newUser), user: sanitizeUser(newUser) });
@@ -141,7 +143,7 @@ res.status(500).json({ error: "Ошибка сервера: " + err.message });
 
 router.post("/register-email", async (req, res) => {
 try {
-const { email, password, name, role, company_name, skip_trial, agreed_terms, ref } = req.body;
+const { email, password, name, role, company_name, skip_trial, agreed_terms, ref, agent_code } = req.body;
 if (!email || !password || !name || !role) return res.status(400).json({ error: "Заполните все поля" });
 if (!["shipper", "carrier"].includes(role)) return res.status(400).json({ error: "Неверная роль" });
 if (password.length < 6) return res.status(400).json({ error: "Пароль должен быть не короче 6 символов" });
@@ -156,13 +158,14 @@ return res.status(403).json({ error: "Регистрация с этими да�
 const co = company_name ? company_name.trim() : null;
 const hash = await bcrypt.hash(password, 10);
 const referrerId = ref ? await resolveReferrer(pool, ref) : null;
+const agentCode = agent_code ? await resolveAgentCode(pool, agent_code) : null;
 const trialDays = referrerId ? 14 : 7; // реферальный бонус: 14 дней пробного вместо 7
 let newUser;
 if (role === "carrier" && skip_trial !== true) {
-const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,subscription_until,terms_accepted_at,terms_version,referred_by) VALUES ($1,$2,$3,$4,$5,now() + ($6 || ' days')::interval,now(),$7,$8) RETURNING *", [normalized, hash, role, name.trim(), co, trialDays, TERMS_VERSION, referrerId]);
+const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,subscription_until,terms_accepted_at,terms_version,referred_by,agent_code) VALUES ($1,$2,$3,$4,$5,now() + ($6 || ' days')::interval,now(),$7,$8,$9) RETURNING *", [normalized, hash, role, name.trim(), co, trialDays, TERMS_VERSION, referrerId, agentCode]);
 newUser = rows[0];
 } else {
-const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,terms_accepted_at,terms_version,referred_by) VALUES ($1,$2,$3,$4,$5,now(),$6,$7) RETURNING *", [normalized, hash, role, name.trim(), co, TERMS_VERSION, referrerId]);
+const { rows } = await pool.query("INSERT INTO users (email,password_hash,role,name,company_name,terms_accepted_at,terms_version,referred_by,agent_code) VALUES ($1,$2,$3,$4,$5,now(),$6,$7,$8) RETURNING *", [normalized, hash, role, name.trim(), co, TERMS_VERSION, referrerId, agentCode]);
 newUser = rows[0];
 }
 res.status(201).json({ ok: true, token: signToken(newUser), user: sanitizeUser(newUser) });

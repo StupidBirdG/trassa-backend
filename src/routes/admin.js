@@ -228,6 +228,58 @@ router.post('/disputes/:id/resolve', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
+// ─── Агенты (обзвонщики) ────────────────────────────────────────────────────
+// Каждый нанятый агент получает свою ссылку trassakz.com/?agent=CODE — видно
+// в реальном времени, сколько регистраций/грузов/подписок реально пришло
+// именно через него. Отдельно от referral_code (та система про награду
+// существующим пользователям платформы, не про сдельную оплату сотрудникам).
+
+router.get('/agents', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        a.id, a.name, a.code, a.active, a.created_at,
+        COUNT(u.id) FILTER (WHERE u.role='shipper')::int AS shippers_registered,
+        COUNT(u.id) FILTER (WHERE u.role='carrier')::int AS carriers_registered,
+        COUNT(DISTINCT c.id)::int AS cargos_posted,
+        COUNT(u.id) FILTER (WHERE u.role='carrier' AND u.subscription_until > now())::int AS carriers_subscribed
+      FROM agents a
+      LEFT JOIN users u ON u.agent_code = a.code
+      LEFT JOIN cargos c ON c.owner_id = u.id
+      GROUP BY a.id
+      ORDER BY a.created_at DESC
+    `);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/agents', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Укажите имя агента' });
+    let code;
+    for (let i = 0; i < 5; i++) {
+      code = require('crypto').randomBytes(4).toString('base64url').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase();
+      try {
+        const { rows } = await pool.query('INSERT INTO agents (name, code) VALUES ($1,$2) RETURNING *', [name.trim(), code]);
+        return res.status(201).json({ ...rows[0], link: 'https://trassakz.com/?agent=' + code });
+      } catch (e) {
+        if (e.code === '23505') continue; // коллизия кода, ретраим
+        throw e;
+      }
+    }
+    res.status(500).json({ error: 'Не удалось сгенерировать уникальный код, попробуйте ещё раз' });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/agents/:id/toggle', async (req, res) => {
+  try {
+    const { rows } = await pool.query('UPDATE agents SET active = NOT active WHERE id=$1 RETURNING *', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Агент не найден' });
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 // ─── Статистика ─────────────────────────────────────────────────────────────
 
 router.get('/stats', async (req, res) => {
