@@ -21,10 +21,11 @@ async function authMiddleware(req, res, next) {
     // created_at добавлен сюда же (2026-07-10, антиабьюз-лимиты для свежих аккаунтов,
     // см. services/antiAbuse.js) — этот запрос и так выполняется на каждый запрос,
     // отдельный поход в БД ради одной колонки был бы лишним.
-    const { rows } = await pool.query('SELECT banned, banned_reason, is_admin, created_at FROM users WHERE id=$1', [req.user.id]);
+    const { rows } = await pool.query('SELECT banned, banned_reason, is_admin, staff_role, created_at FROM users WHERE id=$1', [req.user.id]);
     if (!rows.length) return res.status(401).json({ error: 'Пользователь не найден' });
     if (rows[0].banned) return res.status(403).json({ error: 'Аккаунт заблокирован' + (rows[0].banned_reason ? ': ' + rows[0].banned_reason : ''), code: 'account_banned' });
     req.user.is_admin = rows[0].is_admin;
+    req.user.staff_role = rows[0].staff_role; // 'moderator' | 'support' | null
     req.user.created_at = rows[0].created_at;
     next();
   } catch (e) {
@@ -38,6 +39,18 @@ function adminMiddleware(req, res, next) {
   next();
 }
 
+// Внутренний персонал (2026-07-12): пропускает полных админов ВСЕГДА, плюс
+// пользователей с staff_role из разрешённого списка для конкретного роута.
+// Пример: staffMiddleware('moderator') — модератор и админ проходят, support нет.
+function staffMiddleware(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Требуется авторизация' });
+    if (req.user.is_admin) return next();
+    if (req.user.staff_role && allowedRoles.includes(req.user.staff_role)) return next();
+    return res.status(403).json({ error: 'Недостаточно прав' });
+  };
+}
+
 function signToken(user) {
   return jwt.sign(
     { id: user.id, phone: user.phone, role: user.role },
@@ -46,4 +59,4 @@ function signToken(user) {
   );
 }
 
-module.exports = { authMiddleware, adminMiddleware, signToken };
+module.exports = { authMiddleware, adminMiddleware, staffMiddleware, signToken };

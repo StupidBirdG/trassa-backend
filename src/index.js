@@ -278,6 +278,15 @@ created_at TIMESTAMPTZ DEFAULT now()
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_code VARCHAR(12) REFERENCES agents(code)");
 await pool.query("CREATE INDEX IF NOT EXISTS idx_users_agent_code ON users(agent_code)");
 
+// Внутренний персонал (модераторы/поддержка) — 2026-07-12. Отдельно от
+// is_admin (полный доступ) и от обычной роли shipper/carrier (та колонка
+// имеет CHECK и не принимает 'moderator'/'support' — трогать её рискованно,
+// проще отдельная колонка). NULL = обычный пользователь, не сотрудник.
+// Заходят через скрытую страницу /staff, не видную обычным пользователям —
+// туда не ведёт ни одна ссылка с публичного сайта.
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_role VARCHAR(20) CHECK (staff_role IN ('moderator','support'))");
+await pool.query("CREATE INDEX IF NOT EXISTS idx_users_staff_role ON users(staff_role) WHERE staff_role IS NOT NULL");
+
 console.log("Migrations OK");
 } catch (e) {
 console.error("Migration error:", e.message);

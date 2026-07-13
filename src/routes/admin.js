@@ -1,15 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db/pool');
-const { authMiddleware, adminMiddleware } = require('../middleware/auth');
+const { authMiddleware, adminMiddleware, staffMiddleware } = require('../middleware/auth');
 const { grantReferralReward } = require('../services/referral');
 const { addToBlocklist, removeFromBlocklist } = require('../services/banEvasion');
 
-router.use(authMiddleware, adminMiddleware);
+// Раньше здесь стоял router.use(authMiddleware, adminMiddleware) на ВЕСЬ файл —
+// доступ был только полным админам. С появлением ролей модератор/поддержка
+// (2026-07-12, см. staffMiddleware) часть маршрутов теперь открыта им тоже —
+// middleware проставлен точечно на каждый роут ниже, а не общим блоком.
+router.use(authMiddleware);
 
 // ─── Пользователи ──────────────────────────────────────────────────────────
 
-router.get('/users', async (req, res) => {
+router.get('/users', staffMiddleware('support', 'moderator'), async (req, res) => {
   try {
     const { search, role, banned } = req.query;
     const params = [];
@@ -32,7 +36,7 @@ router.get('/users', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.put('/users/:id/ban', async (req, res) => {
+router.put('/users/:id/ban', adminMiddleware, async (req, res) => {
   try {
     const { banned, reason } = req.body;
     if (req.params.id === req.user.id) return res.status(400).json({ error: 'Нельзя заблокировать самого себя' });
@@ -49,7 +53,7 @@ router.put('/users/:id/ban', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.put('/users/:id/verify', async (req, res) => {
+router.put('/users/:id/verify', adminMiddleware, async (req, res) => {
   try {
     const { verified } = req.body;
     const { rows } = await pool.query('UPDATE users SET verified=$1 WHERE id=$2 RETURNING id, name, verified', [verified === true, req.params.id]);
@@ -63,7 +67,7 @@ router.put('/users/:id/verify', async (req, res) => {
 // партнёров без документов) — этот блок добавляет доказательный путь: админ
 // реально смотрит на загруженное фото документа перед тем как поставить галочку.
 
-router.get('/verification-queue', async (req, res) => {
+router.get('/verification-queue', staffMiddleware('moderator'), async (req, res) => {
   try {
     const { status } = req.query;
     const st = ['pending', 'approved', 'rejected'].includes(status) ? status : 'pending';
@@ -80,7 +84,7 @@ router.get('/verification-queue', async (req, res) => {
 });
 
 // Отдаёт сам файл (для просмотра в админке — <img src> или открыть PDF).
-router.get('/verification/:id/file', async (req, res) => {
+router.get('/verification/:id/file', staffMiddleware('moderator'), async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT file_data, mime_type FROM verification_documents WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Документ не найден' });
@@ -89,7 +93,7 @@ router.get('/verification/:id/file', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.post('/verification/:id/approve', async (req, res) => {
+router.post('/verification/:id/approve', staffMiddleware('moderator'), async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT * FROM verification_documents WHERE id=$1 AND status='pending'", [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Документ не найден или уже обработан' });
@@ -100,7 +104,7 @@ router.post('/verification/:id/approve', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.post('/verification/:id/reject', async (req, res) => {
+router.post('/verification/:id/reject', staffMiddleware('moderator'), async (req, res) => {
   try {
     const { reason } = req.body;
     const { rows } = await pool.query(
@@ -114,7 +118,7 @@ router.post('/verification/:id/reject', async (req, res) => {
 
 // ─── Грузы ──────────────────────────────────────────────────────────────────
 
-router.get('/cargos', async (req, res) => {
+router.get('/cargos', staffMiddleware('support', 'moderator'), async (req, res) => {
   try {
     const { status } = req.query;
     const params = [];
@@ -133,7 +137,7 @@ router.get('/cargos', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.delete('/cargos/:id', async (req, res) => {
+router.delete('/cargos/:id', adminMiddleware, async (req, res) => {
   try {
     const { rows } = await pool.query('DELETE FROM cargos WHERE id=$1 RETURNING id', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Груз не найден' });
@@ -143,7 +147,7 @@ router.delete('/cargos/:id', async (req, res) => {
 
 // ─── Платежи (ручной Kaspi-перевод, пока нет ИП для агрегатора) ────────────
 
-router.get('/payments', async (req, res) => {
+router.get('/payments', staffMiddleware('support'), async (req, res) => {
   try {
     const { status } = req.query;
     const params = [];
@@ -164,7 +168,7 @@ router.get('/payments', async (req, res) => {
 
 // Подтверждает ручной Kaspi-перевод: помечает платёж оплаченным и продлевает/активирует
 // подписку — та же логика продления, что и в автоматическом paybox-callback'е.
-router.post('/payments/:id/confirm', async (req, res) => {
+router.post('/payments/:id/confirm', adminMiddleware, async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT * FROM payments WHERE id=$1 AND status='pending'", [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Платёж не найден или уже обработан' });
@@ -183,7 +187,7 @@ router.post('/payments/:id/confirm', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.post('/payments/:id/reject', async (req, res) => {
+router.post('/payments/:id/reject', adminMiddleware, async (req, res) => {
   try {
     const { rows } = await pool.query("UPDATE payments SET status='failed' WHERE id=$1 AND status='pending' RETURNING id", [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Платёж не найден или уже обработан' });
@@ -193,7 +197,7 @@ router.post('/payments/:id/reject', async (req, res) => {
 
 // ─── Споры (non-monetary защита от мошенничества, пока нет эскроу) ─────────
 
-router.get('/disputes', async (req, res) => {
+router.get('/disputes', staffMiddleware('moderator'), async (req, res) => {
   try {
     const { status } = req.query;
     const params = [];
@@ -216,7 +220,7 @@ router.get('/disputes', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.post('/disputes/:id/resolve', async (req, res) => {
+router.post('/disputes/:id/resolve', staffMiddleware('moderator'), async (req, res) => {
   try {
     const { resolution } = req.body;
     const { rows } = await pool.query(
@@ -234,7 +238,7 @@ router.post('/disputes/:id/resolve', async (req, res) => {
 // именно через него. Отдельно от referral_code (та система про награду
 // существующим пользователям платформы, не про сдельную оплату сотрудникам).
 
-router.get('/agents', async (req, res) => {
+router.get('/agents', adminMiddleware, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT
@@ -253,7 +257,7 @@ router.get('/agents', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.post('/agents', async (req, res) => {
+router.post('/agents', adminMiddleware, async (req, res) => {
   try {
     const { name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Укажите имя агента' });
@@ -272,7 +276,7 @@ router.post('/agents', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
-router.post('/agents/:id/toggle', async (req, res) => {
+router.post('/agents/:id/toggle', adminMiddleware, async (req, res) => {
   try {
     const { rows } = await pool.query('UPDATE agents SET active = NOT active WHERE id=$1 RETURNING *', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Агент не найден' });
@@ -280,9 +284,66 @@ router.post('/agents/:id/toggle', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
+// ─── Внутренний персонал (модераторы/поддержка), 2026-07-12 ────────────────
+// Отдельная скрытая страница входа /staff на фронтенде — никакая ссылка с
+// публичного сайта туда не ведёт. Админ создаёт учётку здесь, получает
+// email+пароль ОДИН РАЗ (пароль не хранится в открытом виде, только хэш —
+// если забыт, нужно создавать новую учётку или явно сбрасывать отдельным
+// эндпоинтом, сейчас его нет — намеренно просто для первой версии).
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+
+router.get('/staff', adminMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, name, email, staff_role, banned, created_at FROM users WHERE staff_role IS NOT NULL ORDER BY created_at DESC"
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.post('/staff', adminMiddleware, async (req, res) => {
+  try {
+    const { name, staff_role } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Укажите имя' });
+    if (!['moderator', 'support'].includes(staff_role)) return res.status(400).json({ error: 'Роль должна быть moderator или support' });
+
+    // Читаемый ID (не UUID целиком) — удобно продиктовать/показать сотруднику.
+    const staffId = crypto.randomBytes(4).toString('base64url').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase();
+    const email = 'staff-' + staffId.toLowerCase() + '@trassakz.internal';
+    const password = crypto.randomBytes(9).toString('base64url').replace(/[^a-zA-Z0-9]/g, '').slice(0, 10);
+    const hash = await bcrypt.hash(password, 10);
+
+    // role='shipper' — технический плейсхолдер: CHECK-констрейнт на этой колонке
+    // допускает только shipper/carrier, а реальный доступ сотрудника целиком
+    // определяется staff_role/is_admin через staffMiddleware, не этим полем.
+    const { rows } = await pool.query(
+      `INSERT INTO users (email, password_hash, role, name, staff_role, terms_accepted_at, terms_version)
+       VALUES ($1,$2,'shipper',$3,$4,now(),'staff-internal')
+       RETURNING id, name, email, staff_role, created_at`,
+      [email, hash, name.trim(), staff_role]
+    );
+
+    // Пароль отдаём ОДИН раз в ответе — дальше нигде не хранится в открытом виде.
+    res.status(201).json({ ...rows[0], staff_id: staffId, password, login_url: 'https://trassakz.com/staff' });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
+router.put('/staff/:id/ban', adminMiddleware, async (req, res) => {
+  try {
+    const { banned } = req.body;
+    const { rows } = await pool.query(
+      "UPDATE users SET banned=$1 WHERE id=$2 AND staff_role IS NOT NULL RETURNING id, name, banned",
+      [banned === true, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Сотрудник не найден' });
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 // ─── Статистика ─────────────────────────────────────────────────────────────
 
-router.get('/stats', async (req, res) => {
+router.get('/stats', adminMiddleware, async (req, res) => {
   try {
     const [users, cargos, subs, banned] = await Promise.all([
       pool.query("SELECT role, COUNT(*)::int AS cnt FROM users GROUP BY role"),
