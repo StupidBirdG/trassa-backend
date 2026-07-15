@@ -232,6 +232,25 @@ router.post('/disputes/:id/resolve', staffMiddleware('moderator'), async (req, r
   } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
 });
 
+// Сообщения, где детектор обмена контактами (см. contactGuard.js) нашёл
+// номер/мессенджер/email — не блокируем отправку, но даём модератору видимость,
+// насколько часто стороны пытаются увести сделку с платформы в обход.
+router.get('/flagged-messages', staffMiddleware('moderator', 'support'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT m.id, m.text, m.created_at, m.cargo_id, c.from_city, c.to_city,
+             u.id AS sender_id, u.name AS sender_name, u.phone AS sender_phone
+      FROM messages m
+      JOIN cargos c ON c.id = m.cargo_id
+      JOIN users u ON u.id = m.sender_id
+      WHERE m.flagged_contact = TRUE
+      ORDER BY m.created_at DESC
+      LIMIT 200
+    `);
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Ошибка сервера' }); }
+});
+
 // ─── Агенты (обзвонщики) ────────────────────────────────────────────────────
 // Каждый нанятый агент получает свою ссылку trassakz.com/?agent=CODE — видно
 // в реальном времени, сколько регистраций/грузов/подписок реально пришло
